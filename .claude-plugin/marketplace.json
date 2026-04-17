@@ -1,0 +1,13 @@
+{
+  "name": "sysdig-skills",
+  "owner": {
+    "name": "Sysdig"
+  },
+  "plugins": [
+    {
+      "name": "sysdig-skills",
+      "source": "./",
+      "description": "Sysdig AI agent skills for cloud security"
+    }
+  ]
+}

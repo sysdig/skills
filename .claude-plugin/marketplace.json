@@ -3,11 +3,14 @@
   "owner": {
     "name": "Sysdig"
   },
+  "metadata": {
+    "description": "Sysdig AI agent skills for cloud security"
+  },
   "plugins": [
     {
-      "name": "sysdig-skills",
-      "source": "./",
-      "description": "Sysdig AI agent skills for cloud security"
+      "name": "sysdig-secure",
+      "source": "./plugins/sysdig-secure",
+      "description": "Sysdig Secure agent skills: API exploration, SysQL queries, UI deep links, cloud onboarding, vulnerability investigation, remediation, and zero-day monitoring"
     }
   ]
 }

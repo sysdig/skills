@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "sysdig": {
+      "command": "npx",
+      "args": ["github:draios/secure-mcp-server"],
+      "env": {
+        "SYSDIG_MCP_API_TOKEN": "${SYSDIG_MCP_API_TOKEN}",
+        "SYSDIG_MCP_API_HOST": "${SYSDIG_MCP_API_HOST}"
+      }
+    }
+  }
+}

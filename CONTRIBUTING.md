@@ -1,6 +1,6 @@
 # Contributing
 
-This repository is a **read-only public mirror** of an internal Sysdig project. Skills published here are promoted from the internal `draios/bloom` repository via an automated GitHub Actions workflow. Direct pull requests against this repository are not accepted — any changes made here will be overwritten on the next promotion run.
+This repository is published and maintained by Sysdig through an automated pipeline. Direct pull requests against it are not accepted — any changes merged here will be overwritten on the next publish run.
 
 ## Reporting issues
 

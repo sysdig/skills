@@ -8,8 +8,8 @@
   },
   "plugins": [
     {
-      "name": "sysdig-secure",
-      "source": "./plugins/sysdig-secure",
+      "name": "headless-cnapp",
+      "source": "./plugins/headless-cnapp",
       "description": "Sysdig Secure agent skills: API exploration, SysQL queries, UI deep links, cloud onboarding, vulnerability investigation, remediation, and zero-day monitoring"
     }
   ]

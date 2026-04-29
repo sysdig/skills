@@ -258,16 +258,31 @@ These targets use the **Agent Access Key** (Settings → Agent Keys in
 Sysdig UI), NOT the Secure API Token. Do NOT ask for or validate the
 API Token.
 
-1. If Step 0b detected `has_url`: note the Sysdig region from the URL.
-   Otherwise, ask the user for their Sysdig region (see Step 2 region
-   detection in [regions.md](references/regions.md)).
+1. **Region detection** — try in order, stop at first hit:
+   a. If Step 0b detected `has_url`: derive the region from the URL.
+   b. Else if an API Token is already available (env var
+      `SYSDIG_SECURE_API_TOKEN`, existing `.sysdig-token` file, or Step 0b
+      `has_token`): run `scripts/detect-region.sh` opportunistically — it
+      only reads the token, never writes or stores. If Step 0b's
+      `best_token_var` is a legacy name (e.g. `SDC_SECURE_TOKEN`,
+      `SYSDIG_MCP_API_TOKEN`, `SECURE_API_TOKEN`), bridge it ephemerally
+      for this single call — e.g.
+      `SYSDIG_SECURE_API_TOKEN="${SDC_SECURE_TOKEN}" scripts/detect-region.sh`
+      — do NOT write `.sysdig-token` in the K8s/Linux flow. Use the
+      detected region.
+   c. Else ask the user for their Sysdig region (see
+      [regions.md](references/regions.md)).
+   Do NOT prompt for an API Token just to detect the region — asking the
+   user for the region directly is faster.
 2. The Agent Access Key will be placed directly in the generated
    configuration (Helm `values.yaml` or `dragent.yaml`) as a placeholder.
    Tell the user: "You'll need your **Agent Access Key** — find it in
    Sysdig UI → Settings → Agent Keys. I'll add a placeholder in the
    config for you to fill in."
 3. **Do NOT create `.sysdig-token`** for K8s/Linux-only onboarding.
-   Do NOT run `detect-region.sh` (it requires the API Token).
+   Never auto-fetch the Access Key from the API — multiple keys may
+   exist, the token may lack permission, or the user may have been given
+   a specific admin-provisioned key.
 
 #### 2b-ii. Context detection & prerequisites
 

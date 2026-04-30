@@ -20,7 +20,7 @@ Sysdig's runtime layer, powered by [Falco](https://falco.org/), provides the hig
 |-------|--------------|
 | [`sysdig-onboarding`](plugins/headless-cloud-security/skills/sysdig-onboarding) | Interactive onboarding assistant. Connects AWS, GCP, or Azure accounts, deploys Sysdig Shield on Kubernetes, and installs host agents. |
 
-More skills are promoted from the source repository as they mature — see [Source and contributions](#source-and-contributions).
+More skills are added as they mature — see [Maintenance and contributions](#maintenance-and-contributions).
 
 ## Prerequisites
 
@@ -94,7 +94,7 @@ ln -s ~/sysdig-skills/skills/* <agent-skills-dir>/
 
 The bare `skills/<skill-name>/` directories at the repo root are kept in sync with the plugin contents on every promotion, so they always reflect the latest published skill set.
 
-The `.mcp.json` and per-skill MCP server dependencies that ship inside `plugins/headless-cloud-security/` are **not** loaded by this method. You must register the [Sysdig MCP server](https://github.com/draios/secure-mcp-server) — and any other MCP servers a skill depends on (Jira, GitHub, …) — with your agent yourself. For Claude Code, prefer the marketplace install above; it loads everything automatically.
+The `.mcp.json` and per-skill MCP server dependencies that ship inside `plugins/headless-cloud-security/` are **not** loaded by this method. You must register the Sysdig MCP server — and any other MCP servers a skill depends on (Jira, GitHub, …) — with your agent yourself. For Claude Code, prefer the marketplace install above; it loads everything automatically.
 
 ## Repository layout
 
@@ -111,15 +111,9 @@ skills/
     └── <skill-name>/                     # bare-skill mirror (spec-compliant)
 ```
 
-## Source and contributions
+## Maintenance and contributions
 
-This repository is the **public distribution channel** for Sysdig's agent skills. It is published automatically from the internal source repository, [`draios/bloom`](https://github.com/draios/bloom), through a curated promotion pipeline:
-
-1. Skills are developed and tested in `draios/bloom`.
-2. A skill is marked for public release with `metadata.yaml` (`audience: customer`, `maturity: stable`).
-3. A maintainer triggers the **Promote to Public** workflow, which mirror-syncs only eligible skills here.
-
-Because every change here is the output of a publish run, **direct pull requests are not accepted** — any direct changes will be overwritten on the next publish. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+This repository is published and maintained by Sysdig through an automated pipeline. **Direct pull requests are not accepted** — any direct changes will be overwritten on the next publish. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ### Reporting issues
 

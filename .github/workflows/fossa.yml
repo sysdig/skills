@@ -1,0 +1,16 @@
+name: Sysdig Workflow Fossa
+on:
+  push:
+    branches:
+      - main
+jobs:
+  build:
+    name: Update Fossa Project
+    runs-on: secure-runner
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Run FOSSA scan
+        uses: fossas/fossa-action@v1.1.0
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}

@@ -4,13 +4,13 @@
     "name": "Sysdig"
   },
   "metadata": {
-    "description": "Sysdig AI agent skills for cloud security"
+    "description": "Sysdig's cloud security expertise, packaged as agent skills."
   },
   "plugins": [
     {
-      "name": "headless-cnapp",
-      "source": "./plugins/headless-cnapp",
-      "description": "Sysdig Secure agent skills: API exploration, SysQL queries, UI deep links, cloud onboarding, vulnerability investigation, remediation, and zero-day monitoring"
+      "name": "headless-cloud-security",
+      "source": "./plugins/headless-cloud-security",
+      "description": "Sysdig's cloud security expertise, packaged as agent skills that work natively in your AI environment."
     }
   ]
 }

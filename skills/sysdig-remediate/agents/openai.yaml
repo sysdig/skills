@@ -1,0 +1,27 @@
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "sysdig"
+      description: "Sysdig MCP server — provides list_investigations, run_sysql, and other vulnerability management tools"
+      transport: "streamable_http"
+      url: "${SYSDIG_MCP_SERVER_URL}"
+      headers:
+        Authorization: "Bearer ${SYSDIG_SECURE_API_TOKEN}"
+        X-Sysdig-Host: "${SYSDIG_SECURE_URL}"
+    - type: "mcp"
+      value: "github"
+      description: "GitHub MCP server — provides repository search, PR creation, and code browsing"
+      transport: "streamable_http"
+      url: "https://api.githubcopilot.com/mcp/"
+      headers:
+        Authorization: "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
+    - type: "mcp"
+      value: "jira-mcp-server"
+      description: "Jira/Atlassian MCP server — used here only for ticket UPDATES when a ticket key is passed in via the `ticket` argument. Ticket creation lives in /sysdig-investigate."
+      transport: "stdio"
+      command: "npx"
+      args: ["-y", "--package=mcp-atlassian", "--package=jsdom", "mcp-atlassian"]
+      env:
+        ATLASSIAN_API_TOKEN: "${JIRA_API_TOKEN}"
+        ATLASSIAN_BASE_URL: "${JIRA_BASE_URL}"
+        ATLASSIAN_EMAIL: "${JIRA_USER_EMAIL}"

@@ -1,0 +1,20 @@
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "sysdig"
+      description: "Sysdig MCP server — provides list_environments, list_investigations, run_sysql, and other vulnerability management tools"
+      transport: "streamable_http"
+      url: "${SYSDIG_MCP_SERVER_URL}"
+      headers:
+        Authorization: "Bearer ${SYSDIG_SECURE_API_TOKEN}"
+        X-Sysdig-Host: "${SYSDIG_SECURE_URL}"
+    - type: "mcp"
+      value: "jira-mcp-server"
+      description: "Jira/Atlassian MCP server — provides ticket search, creation, and updates. Optional — only used if the user opts in to ticket creation in step 5b."
+      transport: "stdio"
+      command: "npx"
+      args: ["-y", "--package=mcp-atlassian", "--package=jsdom", "mcp-atlassian"]
+      env:
+        ATLASSIAN_API_TOKEN: "${JIRA_API_TOKEN}"
+        ATLASSIAN_BASE_URL: "${JIRA_BASE_URL}"
+        ATLASSIAN_EMAIL: "${JIRA_USER_EMAIL}"

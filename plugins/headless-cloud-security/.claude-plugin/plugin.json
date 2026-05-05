@@ -1,0 +1,23 @@
+{
+  "name": "headless-cloud-security",
+  "description": "Sysdig's cloud security expertise, packaged as agent skills that work natively in your AI environment.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Sysdig",
+    "url": "https://github.com/sysdig/skills"
+  },
+  "homepage": "https://github.com/sysdig/skills",
+  "repository": "https://github.com/sysdig/skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "sysdig",
+    "security",
+    "cloud-security",
+    "vulnerability-management",
+    "runtime-security",
+    "kubernetes",
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

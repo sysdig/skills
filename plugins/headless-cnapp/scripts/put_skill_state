@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""
+put_skill_state <key> <json>
+
+Save (create or update) Bloom skill state via the Sysdig API.
+The JSON payload must include a "version" field for optimistic concurrency. Version field is a number, not a string.
+Use version 0 to create a new state. Returns 409 on conflict.
+
+Credentials are read from environment variables:
+  SYSDIG_MCP_API_TOKEN  — Sysdig API token
+  SYSDIG_MCP_API_HOST   — Sysdig instance URL (e.g. https://us2.app.sysdig.com)
+
+Exit codes:
+  0  — state saved, response JSON printed to stdout
+  1  — error (missing credentials, conflict, network failure, unexpected status)
+"""
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def find_env(names: list[str]) -> str | None:
+    for name in names:
+        val = os.environ.get(name, "").strip()
+        if val:
+            return val
+    return None
+
+
+def main() -> None:
+    if len(sys.argv) < 3 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(0)
+
+    key = sys.argv[1]
+    raw_json = sys.argv[2]
+
+    try:
+        payload = json.loads(raw_json)
+    except json.JSONDecodeError as e:
+        print(f"Error: invalid JSON payload — {e}", file=sys.stderr)
+        sys.exit(1)
+
+    token = find_env(
+        ["SYSDIG_MCP_API_TOKEN", "SYSDIG_API_TOKEN", "SYSDIG_SECURE_API_TOKEN"]
+    )
+    host = find_env(["SYSDIG_MCP_API_HOST", "SYSDIG_API_URL", "SYSDIG_BASE_URL"])
+
+    if not token or not host:
+        print(
+            "Error: Sysdig credentials not found. "
+            "Set SYSDIG_MCP_API_TOKEN and SYSDIG_MCP_API_HOST.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    host = host.rstrip("/")
+    url = f"{host}/api/bloom/{urllib.parse.quote(key, safe='')}"
+    body_bytes = json.dumps(payload).encode()
+
+    req = urllib.request.Request(
+        url,
+        data=body_bytes,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            body = resp.read().decode()
+            data = json.loads(body)
+            print(json.dumps(data, indent=2))
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            print(
+                f"Conflict (409): state '{key}' was modified concurrently. "
+                "Re-read the state and retry with the current version.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        body = e.read().decode()
+        print(f"HTTP {e.code} {e.reason}: {body}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,31 @@
+{
+  "name": "headless-cnapp",
+  "description": "Sysdig Secure agent skills: API exploration, SysQL queries, UI deep links, cloud onboarding, vulnerability investigation, remediation, and zero-day monitoring",
+  "version": "1.0.0",
+  "author": {
+    "name": "Sysdig",
+    "url": "https://github.com/sysdig/skills"
+  },
+  "homepage": "https://github.com/sysdig/skills",
+  "repository": "https://github.com/sysdig/skills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "sysdig",
+    "security",
+    "api",
+    "sysql",
+    "cloud-security",
+    "vulnerability",
+    "remediation",
+    "zero-day",
+    "onboarding",
+    "terraform",
+    "helm",
+    "kubernetes",
+    "aws",
+    "gcp",
+    "azure",
+    "jira",
+    "github"
+  ]
+}

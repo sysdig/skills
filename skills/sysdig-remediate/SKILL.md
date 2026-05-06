@@ -100,7 +100,7 @@ Every time a skill finds something new, it should update the state and save it b
 }
 ```
 
-> **Breaking change (SSPROD-67797):** earlier versions of this skill stored
+> **Breaking change:** earlier versions of this skill stored
 > `ticket_assignee` (top level), and `jira_tickets` / `assignee_confirmed`
 > inside `remediation_history`. Those fields have moved to the
 > `sysdig-investigate` skill state. If `get_skill_state` returns any of

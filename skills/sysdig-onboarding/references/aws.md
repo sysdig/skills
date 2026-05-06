@@ -1,7 +1,7 @@
 # AWS Cloud Onboarding Reference
 
-> **Status:** Stub — will be completed in Phase 2 with real module variables,
-> examples, and tested configurations.
+> **Status:** Incomplete — sections marked `<!-- TODO -->` are pending
+> validation and will be filled in as content matures.
 
 ## Table of Contents
 
@@ -50,10 +50,11 @@ applying.
 | CDR | `events:PutRule`, `events:PutTargets` (EventBridge) |
 | VM | `ec2:CreateSnapshot`, `ec2:DescribeSnapshots` (Agentless scanning) |
 
-> **Note:** This list is based on docs as of 2026-02. Docs may be incomplete
-> or outdated — if `terraform apply` fails with an AccessDenied on an action
-> not listed here, add it to `references/known-issues.md` and update the
-> check script.
+> **Note:** This list reflects the documented requirements at the time of
+> writing and may be incomplete or outdated. If `terraform apply` fails
+> with an `AccessDenied` on an action not listed here, consult the
+> official Sysdig permissions reference linked below for the current
+> requirements.
 
 ### IAM Roles Created by Sysdig
 
@@ -80,7 +81,7 @@ https://docs.sysdig.com/en/sysdig-secure/aws-permissions-and-resources/
 
 ## 2. Single Account Setup
 
-<!-- TODO Phase 2: Complete with tested Terraform configuration -->
+<!-- TODO: Complete with tested Terraform configuration -->
 
 Terraform source: `sysdiglabs/secure/aws`
 
@@ -94,7 +95,7 @@ Modules used:
 
 ## 3. Organization Setup
 
-<!-- TODO Phase 2: Complete with tested Terraform configuration -->
+<!-- TODO: Complete with tested Terraform configuration -->
 
 Key differences from single account:
 - `is_organizational = true` on onboarding module
@@ -107,7 +108,7 @@ Key differences from single account:
 
 ## 4. Terraform Module Reference
 
-<!-- TODO Phase 2: Document all module variables with types and defaults -->
+<!-- TODO: Document all module variables with types and defaults -->
 
 ### `sysdiglabs/secure/aws//modules/onboarding`
 
@@ -122,11 +123,11 @@ Key variables:
 
 ### `sysdiglabs/secure/aws//modules/config-posture`
 
-<!-- TODO Phase 2 -->
+<!-- TODO -->
 
 ### `sysdiglabs/secure/aws//modules/integrations/event-bridge`
 
-<!-- TODO Phase 2 -->
+<!-- TODO -->
 
 ### CDR Integration Mode — Interview Sub-Questions
 
@@ -147,7 +148,7 @@ EventBridge), ask these follow-up questions:
 
 ### `sysdiglabs/secure/aws//modules/agentless-scanning`
 
-<!-- TODO Phase 2 -->
+<!-- TODO -->
 
 ### `sysdiglabs/secure/aws//modules/vm-workload-scanning`
 
@@ -162,7 +163,7 @@ Key variables:
 
 ## 5. Feature-Specific Configuration
 
-<!-- TODO Phase 2: Document sysdig_secure_cloud_auth_account_feature resources -->
+<!-- TODO: Document sysdig_secure_cloud_auth_account_feature resources -->
 
 Feature enablement uses `sysdig_secure_cloud_auth_account_feature` resources:
 - `FEATURE_SECURE_CONFIG_POSTURE` — CSPM
@@ -176,7 +177,7 @@ Feature enablement uses `sysdig_secure_cloud_auth_account_feature` resources:
 
 ## 6. Troubleshooting
 
-<!-- TODO Phase 2: Document common issues found during testing -->
+<!-- TODO: Document common issues encountered during onboarding -->
 
 Common areas to watch:
 - IAM permission errors during `terraform apply`

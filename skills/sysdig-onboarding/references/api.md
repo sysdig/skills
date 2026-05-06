@@ -91,12 +91,12 @@ Use `scripts/verify-cloud-status.sh` for safe programmatic checks:
 verify-cloud-status.sh aws
 
 # Check specific account
-verify-cloud-status.sh aws 003314337707
+verify-cloud-status.sh aws 123456789012
 
 # Example output:
 # {
-#   "sysdigAccountId": "6f6c5588-a84e-4625-a113-847e2da79e62",
-#   "providerId": "003314337707",
+#   "sysdigAccountId": "00000000-0000-0000-0000-000000000000",
+#   "providerId": "123456789012",
 #   "provider": "PROVIDER_AWS",
 #   "alias": "",
 #   "enabled": true,

@@ -1,7 +1,7 @@
 # Azure Cloud Onboarding Reference
 
-> **Status:** Stub — will be completed in Phase 5 with real module variables,
-> examples, and tested configurations.
+> **Status:** Incomplete — sections marked `<!-- TODO -->` are pending
+> validation and will be filled in as content matures.
 
 ## Table of Contents
 
@@ -79,7 +79,7 @@ https://docs.sysdig.com/en/sysdig-secure/azure-permissions-and-resources/
 
 ## 2. Single Subscription Setup
 
-<!-- TODO Phase 5 -->
+<!-- TODO -->
 
 Terraform source: `sysdiglabs/secure/azurerm`
 
@@ -93,7 +93,7 @@ Modules used:
 
 ## 3. Tenant-Wide Setup
 
-<!-- TODO Phase 5 -->
+<!-- TODO -->
 
 Key parameters:
 - Management group scoping
@@ -103,7 +103,7 @@ Key parameters:
 
 ## 4. Terraform Module Reference
 
-<!-- TODO Phase 5 -->
+<!-- TODO -->
 
 ---
 
@@ -116,10 +116,10 @@ Azure uses a dual-principal model:
 - **Sysdig service principal**: Created during onboarding with limited
   read-only roles. This is what Sysdig uses to access your environment.
 
-<!-- TODO Phase 5: Detail exact roles for each principal -->
+<!-- TODO: Detail exact roles for each principal -->
 
 ---
 
 ## 6. Troubleshooting
 
-<!-- TODO Phase 5 -->
+<!-- TODO -->

@@ -5,10 +5,10 @@
       "args": ["-y", "@sysdig/secure-mcp-server"],
       "env": {
         "SYSDIG_MCP_TRANSPORT": "stdio",
-        "SYSDIG_SECURE_API_TOKEN": "${SYSDIG_SECURE_API_TOKEN}",
-        "SYSDIG_SECURE_URL": "${SYSDIG_SECURE_URL}",
-        "SYSDIG_MCP_API_TOKEN": "${SYSDIG_MCP_API_TOKEN}",
-        "SYSDIG_MCP_API_HOST": "${SYSDIG_MCP_API_HOST}"
+        "SYSDIG_SECURE_API_TOKEN": "${SYSDIG_SECURE_API_TOKEN:-}",
+        "SYSDIG_SECURE_URL": "${SYSDIG_SECURE_URL:-}",
+        "SYSDIG_MCP_API_TOKEN": "${SYSDIG_MCP_API_TOKEN:-}",
+        "SYSDIG_MCP_API_HOST": "${SYSDIG_MCP_API_HOST:-}"
       }
     }
   }

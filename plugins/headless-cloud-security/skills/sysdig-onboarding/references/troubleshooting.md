@@ -1,23 +1,10 @@
 # Troubleshooting Guide
 
-Common errors and their solutions, organized by category. This document is
-enriched continuously as we test onboarding scenarios and collect feedback
-from support teams and field engineers.
+Common errors encountered during Sysdig Secure onboarding and their
+resolutions, organized by deployment type and component.
 
-## Knowledge Sources for Enrichment
-
-This guide should be periodically enriched with real-world issues from:
-
-- **Glean** — Search for onboarding-related knowledge articles, runbooks,
-  and past resolutions shared by engineering and support teams
-- **DevRev** — Collect customer support tickets related to onboarding
-  failures, permission issues, and post-install problems
-- **Field engineering notes** — Issues reported by SEs during customer
-  onboarding engagements
-- **DEVLOG.md** — Promote recurring patterns from our own testing sessions
-
-When adding entries from these sources, include the source reference
-(e.g., "Source: DevRev ticket #1234") for traceability.
+Each entry follows a **symptom → cause → fix** structure so it can be
+consumed without prior context about the deployment.
 
 ---
 
@@ -30,9 +17,10 @@ When adding entries from these sources, include the source reference
 - **Symptoms:** `validate_prereqs.sh aws` reports "AWS CLI: INSTALLED" but
   `check_permissions.sh` fails with "Unable to locate credentials" or
   "ExpiredToken". The AWS CLI binary exists but has no valid session.
-- **Cause:** The user has AWS CLI installed but hasn't configured credentials.
-  Common scenarios: fresh install without `aws configure`, expired SSO session,
-  or missing `AWS_PROFILE` / `AWS_ACCESS_KEY_ID` environment variables.
+- **Cause:** AWS CLI is installed but credentials are not configured or
+  the current session has expired. Common scenarios: fresh install
+  without `aws configure`, expired SSO session, or missing `AWS_PROFILE` /
+  `AWS_ACCESS_KEY_ID` environment variables.
 - **Fix options:**
   1. **Named profile:** `aws configure --profile sysdig-onboarding` then
      `export AWS_PROFILE=sysdig-onboarding`
@@ -40,94 +28,107 @@ When adding entries from these sources, include the source reference
   3. **Environment variables:** Set `AWS_ACCESS_KEY_ID` and
      `AWS_SECRET_ACCESS_KEY` (less recommended — prefer profiles)
   4. **IAM Identity Center:** `aws configure sso`
-- **Prevention:** `validate_prereqs.sh` checks both installation AND
-  authentication. Always run it before proceeding.
-- **Source:** Test 5b — skill correctly detected CLI-installed-but-not-authenticated
+- **Prevention:** `validate_prereqs.sh` checks both installation **and**
+  authentication. Always run it before proceeding to permission checks.
 
 #### Insufficient IAM permissions for Terraform apply
 
 - **Symptoms:** `check_permissions.sh` reports multiple FAIL results for
-  write operations (e.g., `iam:CreateRole`, `iam:AttachRolePolicy`,
-  `events:PutRule`). If all write permissions are denied, `terraform apply`
-  **will** fail — not "might" or "very likely," but **will**.
+  write operations such as `iam:CreateRole`, `iam:AttachRolePolicy`, or
+  `events:PutRule`. When write permissions are denied, `terraform apply`
+  will fail.
 - **Cause:** The IAM identity (user or role) running Terraform lacks the
-  required permissions. Common when using read-only roles, restrictive SCPs,
-  or permission boundaries.
+  required permissions. Common when using read-only roles, restrictive
+  Service Control Policies (SCPs), or permission boundaries.
 - **Fix:**
-  1. Review the failed checks — each lists the specific IAM action needed
-  2. The skill can generate a `generated/sysdig-required-policy.json` with
-     the minimum IAM policy needed for onboarding
-  3. Attach the policy to the IAM identity and re-run `check_permissions.sh`
-- **Important:** A partial `terraform apply` (where only data sources succeed)
-  is safe — Terraform creates no AWS resources if IAM write calls fail. The
-  state will contain only data sources, which can be cleaned with
-  `terraform destroy` or simply deleted.
-- **Source:** Test 3 — 9/15 write operations denied, terraform apply failed as expected
+  1. Review the failed checks — each lists the specific IAM action needed.
+  2. Generate `generated/sysdig-required-policy.json` with the minimum IAM
+     policy needed for onboarding.
+  3. Attach the policy to the IAM identity and re-run
+     `check_permissions.sh`.
+- **Recovery from a partial apply:** Terraform creates resources
+  incrementally, so an apply that fails on a denied IAM write may have
+  already created earlier resources before aborting. **Always inspect
+  state first** with `terraform state list` before cleaning up:
+  - **State contains only data sources** (no `aws_iam_role`,
+    `aws_iam_policy`, etc.): nothing was created in AWS. Safe to delete
+    the state file or run `terraform destroy`.
+  - **State contains real resources:** AWS resources exist and must be
+    removed before deleting state, or they will be orphaned. Run
+    `terraform destroy` (which requires the same write permissions —
+    fix permissions first), or remove the resources manually via the
+    AWS console / CLI and then `terraform state rm` each one.
+  Never delete the state file without confirming via
+  `terraform state list` that it holds no real resources.
 
 ---
 
 ### Terraform Errors
 
-#### Terraform state drift during offboarding (resources deleted outside Terraform)
+#### Terraform state drift during offboarding
 
-- **Symptoms:** `terraform plan -destroy` or `terraform destroy` shows fewer
-  resources than expected. Some resources show "will be destroyed" while
-  others silently disappear from state during the refresh phase.
+- **Symptoms:** `terraform plan -destroy` or `terraform destroy` shows
+  fewer resources than expected. Some resources show "will be destroyed"
+  while others silently disappear from state during the refresh phase.
 - **Cause:** Resources (e.g., IAM roles, policies) were deleted outside
-  Terraform — manually via the AWS console, by another automation tool, or
-  by an AWS Organization SCP cleanup.
-- **How Terraform handles it:** During `terraform plan` or `terraform destroy`,
-  the AWS provider runs a **refresh** phase that reads each resource from the
-  API. If a resource no longer exists, the provider automatically removes it
-  from state. This is normal behavior — Terraform auto-reconciles drift.
+  Terraform — manually via the AWS console, by another automation tool,
+  or by an AWS Organization SCP cleanup.
+- **How Terraform handles it:** During `terraform plan` or
+  `terraform destroy`, the AWS provider runs a **refresh** phase that
+  reads each resource from the API. If a resource no longer exists, the
+  provider automatically removes it from state. This is normal behavior —
+  Terraform auto-reconciles drift.
 - **When `terraform state rm` is actually needed:** Only when the refresh
-  itself fails — e.g., the provider gets an API error (not "not found" but an
-  actual error like timeout, permission denied, or malformed response) that
-  prevents it from reading the resource. In that case, manually remove the
-  unreachable resource with `terraform state rm <resource_address>` and retry.
-- **Example from testing:** 61 resources in state, 2 IAM roles manually
-  deleted → refresh auto-removed 5 resources (2 roles + 3 attached policies),
-  `terraform destroy` succeeded for the remaining 37 with zero errors.
-- **Source:** Test 5 — corrupted state scenario
+  itself fails — e.g., the provider gets an API error (not "not found"
+  but an actual error like timeout, permission denied, or malformed
+  response) that prevents it from reading the resource. In that case,
+  manually remove the unreachable resource with
+  `terraform state rm <resource_address>` and retry.
+- **Example:** A state with 61 resources, where 2 IAM roles have been
+  deleted manually, will refresh to remove 5 resources (2 roles plus 3
+  policies attached to them); `terraform destroy` then succeeds for the
+  remaining 56 with zero errors.
 
 #### Terraform apply fails with SCP error
 
-- **Symptoms:** `terraform apply` fails with an error containing "explicit deny
-  in a service control policy" and an SCP ARN like
+- **Symptoms:** `terraform apply` fails with an error containing
+  "explicit deny in a service control policy" and an SCP ARN like
   `arn:aws:organizations::ACCOUNT:policy/ORGID/service_control_policy/POLICYID`.
   Some resources may be created successfully while others fail.
-- **Cause:** An AWS Organization Service Control Policy (SCP) is blocking one or
-  more actions required by the Sysdig Terraform module. SCPs override IAM
-  permissions — even `AdministratorAccess` cannot bypass them. SCPs only apply
-  to member accounts, not the management account.
-- **Note on detection:** `check_permissions.sh` falls back to service-level
-  probes when `SimulatePrincipalPolicy` is unavailable (common on cross-account
-  assumed roles). These probes confirm basic service access but cannot detect
-  action-level SCP restrictions (e.g., an SCP blocking `events:PutRule` while
-  `events:ListRules` succeeds).
+- **Cause:** An AWS Organization Service Control Policy (SCP) is blocking
+  one or more actions required by the Sysdig Terraform module. SCPs
+  override IAM permissions — even `AdministratorAccess` cannot bypass
+  them. SCPs only apply to member accounts, not the management account.
+- **Note on detection:** `check_permissions.sh` falls back to
+  service-level probes when `SimulatePrincipalPolicy` is unavailable
+  (common on cross-account assumed roles). These probes confirm basic
+  service access but cannot detect action-level SCP restrictions
+  (e.g., an SCP blocking `events:PutRule` while `events:ListRules`
+  succeeds), so SCP-driven failures may only surface at apply time.
 - **Remediation options:**
-  1. **Modify the SCP** — Add an exception for Sysdig-related roles (e.g.,
-     allow actions for roles matching `sysdig-*` or the specific session principal)
-  2. **Temporarily detach the SCP** during onboarding, then re-attach afterward
-  3. **Skip the blocked capability** — Security posture works independently of
-     threat detection. If only EventBridge actions are blocked, proceed with
-     a posture-only connection
-  4. **Use alternative log capture mode** — If EventBridge is blocked, try
-     CloudTrail/S3 mode which uses different AWS services
-- **Partial success handling:** Terraform creates resources incrementally. If
-  posture resources succeed but threat detection fails, the posture resources
-  are fully functional.
-  Check current state with `terraform state list`. After fixing the SCP, re-run
-  `terraform apply` — Terraform only creates the missing resources. Do NOT run
-  `terraform destroy` unless you want to remove everything including the working
-  posture resources.
-- **Source:** Test 4a v2 (2026-02-26) — SCP blocking `events:PutRule` on member account
+  1. **Modify the SCP** — Add an exception for Sysdig-related roles
+     (e.g., allow actions for roles matching `sysdig-*` or the specific
+     session principal).
+  2. **Temporarily detach the SCP** during onboarding, then re-attach
+     afterward.
+  3. **Skip the blocked capability** — Security posture works
+     independently of threat detection. If only EventBridge actions are
+     blocked, proceed with a posture-only connection.
+  4. **Use alternative log capture mode** — If EventBridge is blocked,
+     try CloudTrail/S3 mode which uses different AWS services.
+- **Partial success handling:** Terraform creates resources
+  incrementally. If posture resources succeed but threat detection
+  fails, the posture resources are fully functional. Check current state
+  with `terraform state list`. After fixing the SCP, re-run
+  `terraform apply` — Terraform only creates the missing resources. Do
+  **not** run `terraform destroy` unless you want to remove everything,
+  including the working posture resources.
 
 ---
 
 ### Sysdig / API
 
-<!-- Entries will be added during Phase 2-5 testing -->
+<!-- TODO: API and onboarding-flow errors -->
 
 ---
 
@@ -135,13 +136,13 @@ When adding entries from these sources, include the source reference
 
 ### Helm Installation
 
-<!-- Entries will be added during Phase 3 testing -->
+<!-- TODO: Helm install, chart version, and namespace errors -->
 
 ---
 
 ### Agent Connectivity
 
-<!-- Entries will be added during Phase 3 testing -->
+<!-- TODO: Collector connectivity, TLS, and proxy errors -->
 
 ---
 
@@ -149,13 +150,13 @@ When adding entries from these sources, include the source reference
 
 ### Package Installation
 
-<!-- Entries will be added during Phase 6 testing -->
+<!-- TODO: apt/yum/dnf installation errors -->
 
 ---
 
 ### Agent Runtime
 
-<!-- Entries will be added during Phase 6 testing -->
+<!-- TODO: Agent service, kernel module, and eBPF errors -->
 
 ---
 

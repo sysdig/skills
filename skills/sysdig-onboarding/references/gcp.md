@@ -1,7 +1,7 @@
 # GCP Cloud Onboarding Reference
 
-> **Status:** Stub — will be completed in Phase 4 with real module variables,
-> examples, and tested configurations.
+> **Status:** Incomplete — sections marked `<!-- TODO -->` are pending
+> validation and will be filled in as content matures.
 
 ## Table of Contents
 
@@ -60,7 +60,7 @@ Sysdig creates two service accounts:
 | `roles/orgpolicy.policyViewer` | Review organization policies |
 
 ### Required APIs
-<!-- TODO Phase 4: List specific APIs that must be enabled per feature -->
+<!-- TODO: List specific APIs that must be enabled per feature -->
 
 ### Official Permissions Reference
 
@@ -71,7 +71,7 @@ https://docs.sysdig.com/en/sysdig-secure/gcp-permissions-and-resources/
 
 ## 2. Single Project Setup
 
-<!-- TODO Phase 4 -->
+<!-- TODO -->
 
 Terraform source: `sysdiglabs/secure/google`
 
@@ -85,7 +85,7 @@ Modules used:
 
 ## 3. Organization Setup
 
-<!-- TODO Phase 4 -->
+<!-- TODO -->
 
 Key parameters:
 - `include_folders` / `exclude_folders`
@@ -95,13 +95,13 @@ Key parameters:
 
 ## 4. Terraform Module Reference
 
-<!-- TODO Phase 4 -->
+<!-- TODO -->
 
 ---
 
 ## 5. Domain-Wide Delegation
 
-<!-- TODO Phase 4: Multi-step manual process for advanced CIEM -->
+<!-- TODO: Multi-step manual process for advanced CIEM -->
 
 Required for advanced CIEM on GCP. Involves:
 - Creating a custom admin role in Google Workspace Admin
@@ -112,4 +112,4 @@ Required for advanced CIEM on GCP. Involves:
 
 ## 6. Troubleshooting
 
-<!-- TODO Phase 4 -->
+<!-- TODO -->

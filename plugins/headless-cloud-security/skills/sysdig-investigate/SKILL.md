@@ -2,9 +2,10 @@
 name: sysdig-investigate
 description: >
   Investigate vulnerable images in a Sysdig-monitored environment. Fetches and ranks
-  images by risk, lets the user choose a focus (zero-day, critical in-use, exposed, all),
-  builds a remediation plan, optionally creates a tracking ticket (Jira / Linear /
-  GitHub Projects) using Sysdig-side signals to determine the assignee, and hands off
+  images by a chosen risk metric (finding_count, exposure_time_weighted,
+  exposure_time_avg, sla_compliance, or actually_exploitable_findings), builds a
+  remediation plan, optionally creates a tracking ticket (Jira / Linear / GitHub
+  Projects) using Sysdig-side signals to determine the assignee, and hands off
   to /sysdig-remediate.
   Triggers on: "investigate", "what should I fix", "show me vulnerable images",
   "prioritize vulnerabilities", "/sysdig-investigate".

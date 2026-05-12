@@ -1,10 +1,6 @@
 ---
 name: sysdig-posture
-description: >
-  Author Sysdig Secure Posture custom controls (Rego) and custom policies, and
-  emit Terraform using the Sysdig provider. API access is read-only: discover
-  supported resource kinds, validate Rego, list policies / controls.
-  All writes happen through Terraform, never through the API.
+description: 'Author Sysdig Secure Posture custom controls (Rego) and custom policies, and emit Terraform via the Sysdig provider. Use when the user wants to "write a posture rule," "create a custom CSPM control," "fail my policy when an S3 bucket is unencrypted," or "group these CIS controls into a custom policy." Never writes to Sysdig directly — all writes go through Terraform on user approval. Not for: zone management, built-in Sysdig controls, runtime threat detection, vulnerable-image triage or remediation, or onboarding cloud accounts.'
 allowed-tools:
   - Read
   - Glob
@@ -20,11 +16,10 @@ allowed-tools:
   - Bash(terraform state show*)
   - Bash(terraform output*)
   - Bash(terraform version*)
-  - Bash(go version*)
   - Bash(command -v *)
+  - Bash(scripts/*)
   - Bash(echo "${SYSDIG_SECURE_URL:+SET}")
   - Bash(echo "${SYSDIG_SECURE_API_TOKEN:+SET}")
-  - Bash(*validate_prereqs*)
   - Bash(mkdir -p *)
   - Bash(ls *)
 ---
@@ -56,19 +51,15 @@ Help users author Posture custom controls and custom policies for Sysdig Secure,
 - **Human approves destructive ops.** `terraform apply` and `terraform destroy` require explicit user confirmation. `init`, `plan`, `validate`, and read-only MCP tool calls run proactively.
 - **No shell redirections in Bash.** Never use `>`, `>>`, `|`, or `2>&1` in Bash tool calls — they break `allowed-tools` matching.
 
-## Prerequisites
+## Step 0: Trust Preamble
+
+**Always present this before asking any questions.** See [references/trust-preamble.md](references/trust-preamble.md) for the full text. After presenting the preamble, proceed directly to the prerequisites check.
+
+## Prerequisites and credentials
 
 ### MCP availability
 
-Verify that the Sysdig MCP server is available by checking that the `get_customer_settings` tool exists. If it is not available, stop and **output the message below verbatim — do not paraphrase, expand, restructure, or drop sentences**:
-
-> **Sysdig MCP server isn't reachable** (the tool `get_customer_settings` is missing). To register it in Claude Code:
->
-> ```
-> claude mcp add sysdig -- npx -y @sysdig/secure-mcp-server
-> ```
->
-> Set `SYSDIG_SECURE_API_TOKEN` and `SYSDIG_SECURE_URL` first, then re-run `/sysdig-posture`. For other agents (Cursor, Codex, OpenCode) and troubleshooting: [`references/mcp-setup.md`](references/mcp-setup.md).
+Verify that the Sysdig MCP server is available by checking that the `get_customer_settings` tool exists. If it is not available or the call fails, **do not show a generic error message**. Instead, follow the "Agent diagnostic checklist" in [`references/mcp-setup.md`](references/mcp-setup.md) — run the checks in order, identify the specific failure, and report only the relevant problem and its fix to the user.
 
 Do not proceed until the MCP server is reachable. The same env vars are picked up by the Sysdig Terraform provider, so once the MCP check passes, `terraform plan/apply` will authenticate from the same place.
 
@@ -77,16 +68,19 @@ Do not proceed until the MCP server is reachable. The same env vars are picked u
 Run `scripts/validate_prereqs.sh` before starting. It checks the local tooling needed for the Terraform path:
 
 - **Terraform** — required.
-- **Go** — required by the Sysdig Terraform provider build path.
 - **Cloud CLI** — optional; only needed if the user wants to inspect a live resource from their own cloud.
 
-If `ok` is `false`, surface the install command for each entry in `missing` and stop.
+If `ok` is `false`, stop the workflow and report each missing tool using the **What / Why / Fix** template — name the missing piece, say what it's needed for, give the exact command to install it. For each tool name in `missing`:
+
+- **Terraform**: *"Terraform isn't installed. Needed to emit and apply the `.tf` files this skill produces. Install with `brew install terraform` (macOS) or see https://developer.hashicorp.com/terraform/install."*
+
+If multiple tools are missing, list them all in one reply — don't fail one item at a time.
 
 ### Terraform credentials
 
 The Sysdig Terraform provider needs credentials at plan/apply time. They can come from the agent's shell (`SYSDIG_SECURE_URL` + `SYSDIG_SECURE_API_TOKEN`) or from an existing `provider "sysdig"` block already wired up in the user's IaC repo (tfvars-driven, vault-backed, etc.). MCP availability does not imply env vars are exported locally — the MCP server may be remote and hold its own credentials.
 
-Probe both env vars without leaking the token value:
+Probe both credential env vars without leaking the token value:
 
 ```
 echo "${SYSDIG_SECURE_URL:+SET}"
@@ -96,7 +90,10 @@ echo "${SYSDIG_SECURE_API_TOKEN:+SET}"
 - **Both print `SET`** → proceed.
 - **Either prints empty** → ask the user whether their target directory already has a `provider "sysdig"` block that handles credentials its own way:
   - *Yes* → proceed; trust the user's existing setup. The generated `versions.tf` will be skipped at the generation step if their `versions.tf` already exists.
-  - *No* → ask the user to `export` the missing variable in the shell where Terraform will run, then re-probe. Never accept a token in chat.
+  - *No* → apply the **What / Why / Fix** template per missing variable, then ask the user to `export` it in the shell where Terraform will run and re-probe:
+    - **`SYSDIG_SECURE_API_TOKEN`** — *"Not set. Needed so the Sysdig provider and the MCP server can authenticate. Set it with `export SYSDIG_SECURE_API_TOKEN=<your token>` and re-run."*
+    - **`SYSDIG_SECURE_URL`** — *"Not set. Needed so the Sysdig provider knows which region to talk to. Set it with `export SYSDIG_SECURE_URL=https://secure.sysdig.com` (or your regional URL) and re-run."*
+  - Never accept a token in chat.
 
 ## Routing
 

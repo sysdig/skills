@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # validate_prereqs.sh — check posture-skill local prerequisites.
 #
-# Required tools: terraform, go
+# Required tools: terraform
 # Optional:       one of aws | gcloud | az (for live-resource inspection)
 #
 # Sysdig credentials are NOT checked here. The skill verifies the Sysdig
@@ -36,7 +36,6 @@ record_version() {
 }
 
 record_version terraform terraform version
-record_version go go version
 
 cloud_found="false"
 for cli in aws gcloud az; do

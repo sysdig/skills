@@ -9,6 +9,27 @@ description: >
   to /sysdig-remediate.
   Triggers on: "investigate", "what should I fix", "show me vulnerable images",
   "prioritize vulnerabilities", "/sysdig-investigate".
+  Not for opening PRs, applying code fixes, or generating Dockerfile patches —
+  use /sysdig-remediate for that.
+allowed-tools:
+  - AskUserQuestion
+  - Read
+  - Write
+  - mcp__secure-mcp-server__get_customer_settings
+  - mcp__secure-mcp-server__get_skill_state
+  - mcp__secure-mcp-server__save_skill_state
+  - mcp__secure-mcp-server__delete_skill_state
+  - mcp__secure-mcp-server__list_plans
+  - mcp__secure-mcp-server__list_plan_remediation_jobs
+  - mcp__secure-mcp-server__list_zones
+  - mcp__secure-mcp-server__list_vulnerability_findings_by_image
+  - mcp__secure-mcp-server__list_candidate_remediation_jobs
+  - mcp__secure-mcp-server__run_sysql
+  - mcp__secure-mcp-server__create_plan
+  - mcp__atlassian__searchJiraIssuesUsingJql
+  - mcp__atlassian__createJiraIssue
+  - mcp__atlassian__editJiraIssue
+  - mcp__atlassian__addCommentToJiraIssue
 ---
 
 ## First-run notice (Public Beta)
@@ -26,8 +47,15 @@ Before doing any other work for this skill, perform this one-time check:
 
 When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
 
-Investigate vulnerable images in a Sysdig-monitored environment, build a remediation plan,
-optionally file a tracking ticket per image, and hand off to `/sysdig-remediate`.
+Investigate vulnerable images in a Sysdig-monitored environment in four phases: **discover** the candidates (existing plan when `sage.next` is enabled, or zone-based search on the legacy path), **prioritize** by a focus metric, **optionally ticket** them in your tracker, and **hand off** to `/sysdig-remediate` for the fix. This skill **never opens PRs or applies fixes** — that work lives in `/sysdig-remediate`.
+
+> **To apply the fix, run `/sysdig-remediate` after this skill hands off.**
+> `/sysdig-remediate` resolves safe fix versions, opens a PR/MR, and updates the linked ticket on completion.
+
+## Conversation rules
+
+- **Narrate before every tool call.** Before invoking any tool, say what you're about to do and which tool you're using. No silent calls.
+- **Announce every skill handoff.** Before invoking another skill, name it explicitly and summarize what it'll do, then wait for confirmation.
 
 ## State
 
@@ -87,6 +115,11 @@ A `null` response from `get_skill_state` means no state exists yet — start wit
 ### Read/write rules
 
 - **Get** the state at the start of every session by calling the MCP tool `get_skill_state` with `{ "skill_state": "investigate" }`. A `null` response means no state exists yet — start with `{ "version": 0 }`.
+- **Resume summary** — only when `get_skill_state` returned a non-`null` value. Skip on a fresh read (`null` state), since there are no `plan` entries to inspect. Otherwise, if the state has one or more `plan` entries still in `status: "pending"` (populated by step 7's writer — see the [State schema](#schema)), print a one-line summary before doing anything else and let the user choose how to proceed:
+
+  > _"Last run YYYY-MM-DD — `<pending_count>` of `<total_count>` images still pending in zone `<zone>`, focus `<focus>`. Continue, refresh, or start fresh?"_
+
+  Treat state older than 15 days as stale and recommend refresh; treat `delete_skill_state` as the "start fresh" action.
 - **Save** the state at the end of every session by calling the MCP tool `save_skill_state` with `{ "skill_state": "investigate", "version": <n>, "data": { ... } }`. Read the current contents first, merge new data, then pass the full merged object as `data`.
 - **Version argument** — the server uses `version` for optimistic concurrency. Pass it as a separate argument (do not include it inside `data`):
   - First write (`get_skill_state` returned `null`) → call with `version: 0`. The server creates the record.
@@ -104,34 +137,38 @@ A `null` response from `get_skill_state` means no state exists yet — start wit
 
 ## Steps
 
-### 0. Prerequisites
+### 0. Trust preamble
 
-Verify that the Sysdig MCP server is available by checking that the `get_customer_settings` tool exists. If it is not available, stop and **output the message below verbatim — do not paraphrase, expand, restructure, or drop sentences**:
+**Always present this before asking any questions.** See [references/trust-preamble.md](references/trust-preamble.md) for the full text. After presenting the preamble, proceed directly to step 0a — do not ask for confirmation.
 
-> **Sysdig MCP server isn't reachable** (the tool `get_customer_settings` is missing). To register it in Claude Code:
->
-> ```
-> claude mcp add sysdig -- npx -y @sysdig/secure-mcp-server
-> ```
->
-> Set `SYSDIG_SECURE_API_TOKEN` and `SYSDIG_SECURE_URL` first, then re-run `/sysdig-investigate`. For other agents (Cursor, Codex, OpenCode) and troubleshooting: [`references/mcp-setup.md`](references/mcp-setup.md).
+### 0a. Prerequisites and routing
+
+**MCP probe.** Verify that the Sysdig MCP server is available by calling `get_customer_settings`. If the tool is missing or the call fails, **do not show a generic error message**. Instead, follow the "Agent diagnostic checklist" in [`references/mcp-setup.md`](references/mcp-setup.md) — run the checks in order, identify the specific failure, and report only the relevant problem and its fix to the user.
 
 Do not proceed until the MCP server is reachable.
-If the `get_customer_settings` tool responds, check if the flag `sage.next.enabled` is set to true. 
-If not, jump to step 1b
 
-### 1. Load existing plans
+**Route on `sage.next.enabled`.** From the same `get_customer_settings` response, read the `sage.next.enabled` flag:
 
-Using the tool `list_plans` check if there are existing plans the company is working on. A plan is a set of jobs (images to remediate) in a particular scope (one or more zones) for a particular `target_measure`.
-List plans to the user and ask if he wants to work on one of them. Last choice must be a free search using an existing zone and a choosen `target_measure`.
-If the user picks up a plan, fetch and present images using the tool `list_plan_remediation_jobs` and the plan_id the user selected and then jump and point 4a.
+- If **true** → continue to step 1 (plan-based hot path).
+- If **false** → jump to step 1L (legacy fallback).
 
-### 1b. Load vulnerable images using findings APIs
+### 1. Plan-based flow — pick an existing plan or start fresh
+
+**a. List existing plans.** Using the tool `list_plans`, check if there are existing plans the company is working on. A **plan** is a tracked set of **remediation jobs** (one job per image to fix) within a chosen scope — one or more **zones** (groups of resources sharing a policy, e.g. production or staging) — and a chosen `target_measure`. Present the plans to the user and ask whether they'd like to work on one of them, or "none of these — start a free investigation."
+
+**b. Branch on the user's choice.**
+- If the user picks an existing plan → fetch and present its images using `list_plan_remediation_jobs` with the selected `plan_id`, then jump to step 4a.
+- If the user picks "none" → proceed to step 2 (zones) for a free investigation.
+
+### 1L. Legacy fallback (only when `sage.next.enabled` is false)
 
 Refer to [zones](references/zones.md) to fetch user available zones.
-Ask the user to pick a zone. Always include a zone "Entire Infrastructure" (no zone)
+Ask the user to pick a zone. Always include a zone "Entire Infrastructure" (no zone).
 
-Then, using the tool `list_vulnerability_findings_by_image` use the user selected zones, to fetch the 10 most vulnerable images to the user.
+Then, using the tool `list_vulnerability_findings_by_image` and the user-selected zones, fetch the 10 most vulnerable images.
+
+After listing, tell the user how much they're seeing. If the API response includes a total count, print _"Showing top 10 of N — say 'more' to expand or describe a filter."_; otherwise print _"Showing the top 10. Say 'more' to fetch additional results or 'filter' to narrow."_ When the user says "more", re-call `list_vulnerability_findings_by_image` with a higher `limit`.
+
 Ask: _"Which of these would you like to remediate? (say 'all', pick numbers, or describe a filter)"_
 Skip to step 5.
 
@@ -145,13 +182,13 @@ Ask the user to pick a zone. Always include a zone "Entire Infrastructure" (no z
 Ask the user what they want to focus on:
 
 > "What would you like to investigate?"
-> 1. **finding_count**: total distinct CVE+package findings.
-> 2. **exposure_time_weighted**: age-weighted sum of findings (longer exposure = higher score).
-> 3. **exposure_time_avg**: average age of Critical+High findings.
-> 4. **sla_compliance**: lexicographic urgency based on oldest-bucket age vs SLA threshold.
-> 5. **actually_exploitable_findings**: count of in-use, network-reachable findings.
+> 1. **Most CVEs** (`finding_count`) — total distinct CVE+package findings.
+> 2. **Longest exposure** (`exposure_time_weighted`) — older findings weigh more.
+> 3. **Average age** (`exposure_time_avg`) — average age of Critical+High findings.
+> 4. **SLA risk** (`sla_compliance`) — ranks by oldest-bucket age vs. SLA threshold (as computed by Sysdig).
+> 5. **Actually exploitable** (`actually_exploitable_findings`) — in-use AND network-reachable.
 
-Map the user's choice to `target_measure` parameter.
+Map the user's choice to the `target_measure` parameter (the parenthetical above).
 
 ### 4. Fetch and present images
 
@@ -172,6 +209,8 @@ severity score descending:
 |---|-------|--------|--------------------|---------------|
 | 1 | quay.io/org/app:1.2 | 9 actually exploitable findings | 30% | 17 | 23
 | 2 | quay.io/org/svc:2.0 | 16 actually exploitable findings | 12% | 43 | 44
+
+After the table, tell the user how much they're seeing. If the API response includes a total count, print _"Showing top 10 of N — say 'more' to expand or describe a filter."_; otherwise print _"Showing the top 10. Say 'more' to fetch additional results or 'filter' to narrow."_ When the user says "more", re-call `list_candidate_remediation_jobs` with a higher `limit`.
 
 Ask: _"Which of these would you like to remediate? (say 'all', pick numbers, or describe a filter)"_
 
@@ -332,7 +371,7 @@ on completion.
 
 h2. References
 
-- Sysdig investigation global_id: {noformat}<global_id>{noformat}
+- Sysdig investigation global_id (unique candidate-job identifier in Sysdig): {noformat}<global_id>{noformat}
 - Detection date: <date>
 ```
 
@@ -364,6 +403,10 @@ After the create or update operation, record the result in state:
 - Attach `ticket_key` to that image's `plan` entry so step 6 can pass it to `/sysdig-remediate`.
 
 ### 6. Hand off to `/sysdig-remediate`
+
+Before the first invocation, announce the handoff and wait for confirmation:
+
+> _"Investigation complete. Handing off to `/sysdig-remediate` for `<image_reference>` — it will analyze fix versions and open a PR. Continue?"_
 
 For each approved image (in order), invoke `/sysdig-remediate` passing the image reference,
 `image_id`, and the optional `ticket_key` if a ticket was created or matched in step 5b:
@@ -402,6 +445,27 @@ Save state even if the session ended before remediation started — the plan ent
 
 On a 409 conflict, call `get_skill_state` again, merge the plan entries (upsert by `global_id`) into the freshly-read state, and retry once with the new `version`.
 
+## Error handling
+
+Every failure surfaced to the user follows the same **what / why / fix** shape, modeled on the verbatim MCP-unreachable message in step 0a:
+
+1. **What** — the specific operation that failed.
+2. **Why** — the underlying cause in concrete terms.
+3. **Fix** — the exact next action or command, copy-pasteable.
+
+Apply this template to:
+
+- **SysQL failures** in step 5 (e.g. malformed query, MCP timeout, empty result against an expected non-empty workload).
+- **`list_candidate_remediation_jobs` errors** in step 4 beyond the "empty result" case already documented (e.g. 4xx/5xx, scope mismatch, missing zone access).
+- **`save_skill_state` conflicts** in step 7 — after one merge-and-retry attempt fails, surface the conflict with what/why/fix instead of silently retrying.
+- **Ticketing write failures** in step 5b — per-image, with the ticket system, the operation (create vs. update), and the system's error reason.
+
+For **batched ticket operations** (when the user said "create tickets for all"), use a partial-success report instead of bundling everything into a single success or single failure:
+
+> _"Created 3 of 5 tickets. The other 2 failed: `quay.io/org/app:1.2` (Jira: assignee not in project), `quay.io/org/svc:2.0` (Jira: 401 unauthorized). Want details on any?"_
+
+Never report partial success as plain "success".
+
 ## Important rules
 
 - Always read state at the start (via script) and write state at the end — even for short sessions.
@@ -416,3 +480,4 @@ On a 409 conflict, call `get_skill_state` again, merge the plan entries (upsert 
 - Always search for an existing open ticket before creating a new one. Prefer updating over duplicating.
 - When updating an existing ticket, never remove or modify the original description — append below a `----` separator.
 - Never set an assignee without confirming with the user first.
+- **Respect the user's "no".** When the user declines an image, ticket suggestion, or proposed assignee, mark the decision (e.g. set the matching `plan` entry's `status` to `skipped`) and never re-suggest the same item within the session.

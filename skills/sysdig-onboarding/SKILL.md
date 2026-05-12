@@ -2,8 +2,8 @@
 name: sysdig-onboarding
 description: >
   Interactive onboarding assistant for Sysdig Secure. Guides users through
-  connecting AWS, GCP, or Azure cloud accounts and Kubernetes clusters to
-  Sysdig. Presents security capabilities in plain language instead of jargon.
+  connecting AWS cloud accounts and Kubernetes clusters to Sysdig.
+  Presents security capabilities in plain language instead of jargon.
   Supports guided (interview) and autonomous (all-at-once) modes. Generates
   Terraform configurations for cloud accounts and Helm values for Kubernetes,
   validates prerequisites, deploys, and verifies connectivity.

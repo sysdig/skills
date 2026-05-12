@@ -56,7 +56,7 @@ event is opportunistic recon: 4/5.">
 ### What happened
 
 - **Trigger:** <rule name(s)>, classified as <MITRE tactic>.
-- **Process tree (from `mcp__sysdig__get_event_process_tree`, if available):** render as `parent → child → grandchild` with command-line snippets where useful. Fall back to "no process tree available" if the MCP call returned nothing or wasn't loaded.
+- **Process tree (from `mcp__secure-mcp-server__get_event_process_tree`, if available):** render as `parent → child → grandchild` with command-line snippets where useful. Fall back to "no process tree available" if the MCP call returned nothing or wasn't loaded.
 - **Process evidence (parsed from threat description):** <e.g. "systemd → sshd → bash → locale (repeated)". Lift this from `aiGeneratedDescription` parsing — keeps the AI's narrative read alongside the structured tree.>
 - **Resource:** <cluster/namespace/workload> *(or `host <hostname>` for non-K8s)*.
 - **AI-generated rationale:** <1–2 sentences summarising `aiGeneratedDescription`.>
@@ -175,7 +175,7 @@ Keep it tight: one row per diagram node, in chronological order. Use inline code
 ### Resource context
 
 - **Cluster / host metadata:** <e.g. "GCP node in cluster `ai-attack-demo`, region europe-west1">.
-- **Sibling workloads on this resource:** <list 3–5 from `mcp__sysdig__run_sysql` siblings query. If empty, "no siblings surfaced".>
+- **Sibling workloads on this resource:** <list 3–5 from `mcp__secure-mcp-server__run_sysql` siblings query. If empty, "no siblings surfaced".>
 - **Prior events on this resource (last 7d):** <count + 1-line rule summary, e.g. "4 prior events: 2× Discovery, 1× Defense Evasion, 1× same rule firing 2 days ago". If empty, "no prior events".>
 - **ServiceAccount RBAC** *(K8s workload threats only)*: <one-line summary of bound roles, e.g. "default SA with cluster-wide list/get on Pods + Deployments — explains kubectl-style lateral capability". If skipped, "RBAC not enumerated".>
 

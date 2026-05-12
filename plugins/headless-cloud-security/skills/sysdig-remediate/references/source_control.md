@@ -16,7 +16,7 @@ If none of these is reachable, stop the skill and tell the user that source acce
 
 ## Selection algorithm
 
-Run this in step 0 of `SKILL.md`, before touching any other tool. Stop on the first match — do not silently combine sources for one image.
+Run this in step 0a of `SKILL.md`, before touching any other tool. Stop on the first match — do not silently combine sources for one image.
 
 1. **Check the cached mapping.** Read `image_repo_mappings` from the skill state. If an entry for the target image is less than 30 days old, infer the source kind from its `repository` field (e.g. `org/repo` → github; full HTTPS URL on a non-github host → gitlab; absolute filesystem path → local) and skip ahead to the **verify auth** step for just that kind.
 

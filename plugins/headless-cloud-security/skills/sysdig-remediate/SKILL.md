@@ -1,6 +1,41 @@
 ---
 name: sysdig-remediate
-description: Remediate a vulnerable container image by fetching its Critical/High CVEs from Sysdig, resolving safe fix versions through chain analysis, and producing the minimal patch (Dockerfile base bump or dependency upgrade) against the source — opens a PR/MR on GitHub or GitLab, or emits a .patch file when the user provides a local folder. Source access is mandatory. If an existing ticket key is passed in, updates that ticket with the PR link; this skill never creates new tickets — ticket creation lives in /sysdig-investigate. Persists image-to-repo mappings, PR reviewer history, and version chains across sessions.
+description: >
+  Remediate one specific vulnerable container image. Fetches Critical/High
+  CVEs from Sysdig, resolves a safe fix version via chain analysis, and
+  opens a PR/MR (GitHub/GitLab) or emits a local patch.
+  Triggers: "fix the nginx image", "patch CVE-2024-1234 in api-server",
+  "remediate quay.io/org/app:tag", "/sysdig-remediate <image>".
+  Not for: discovery, prioritization, or ticket creation — use /sysdig-investigate.
+allowed-tools:
+  - Read
+  - Write
+  - AskUserQuestion
+  - Bash(git status*)
+  - Bash(git log*)
+  - Bash(git diff*)
+  - Bash(git apply*)
+  - Bash(git checkout -b sysdig/fix-*)
+  - Bash(git add*)
+  - Bash(git commit -m*)
+  - Bash(git push origin sysdig/fix-*)
+  - Bash(git push origin --delete sysdig/fix-*)
+  - Bash(gh search code*)
+  - Bash(gh api repos/*)
+  - Bash(gh pr create*)
+  - Bash(gh pr list*)
+  - Bash(gh pr view*)
+  - Bash(gh pr close*)
+  - Bash(glab api*)
+  - Bash(glab mr create*)
+  - Bash(glab mr list*)
+  - Bash(glab mr view*)
+  - Bash(glab mr close*)
+  - mcp__sysdig__get_customer_settings
+  - mcp__sysdig__get_skill_state
+  - mcp__sysdig__save_skill_state
+  - mcp__sysdig__delete_skill_state
+  - mcp__sysdig__run_sysql
 ---
 
 ## First-run notice (Public Beta)
@@ -15,13 +50,20 @@ Before doing any other work for this skill, perform this one-time check:
 3. Create the marker file `~/.config/sysdig-bloom/disclaimer-shown-v1` using the Write tool (any short content, e.g. the current UTC timestamp). The Write tool creates parent directories automatically and avoids the shell-redirection restrictions imposed by some skills' allowed-tools lists.
 4. Then continue with the user's request.
 
+*Uses: Sysdig MCP, GitHub (`gh`) or GitLab (`glab`), `git`, optional Jira/Linear/GitHub Projects MCP for ticket updates.*
 
-When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
-
-Remediate a single vulnerable image in a Sysdig-monitored environment. Locates the source code (GitHub, GitLab, or a local folder the user provides) and — where possible — opens a PR/MR or emits a patch file. If a ticket key is passed in, updates that ticket with the PR link on completion. This skill **never creates tickets** — run `/sysdig-investigate` first to discover/triage images and (optionally) file a tracking ticket.
+Remediate a single vulnerable image in a Sysdig-monitored environment in four steps: **locate** the source (GitHub, GitLab, or a local folder), **resolve** a safe fix version through chain analysis, **open** a PR/MR (or emit a `.patch` for local mode), and **optionally update** a ticket if a key was passed in. This skill **never creates tickets** — that work lives in `/sysdig-investigate`.
 
 > **To find and prioritize which images to remediate, run `/sysdig-investigate` first.**
 > `/sysdig-investigate` fetches the investigation list, ranks images, optionally creates a tracking ticket, and hands off to this skill.
+
+## Conversation rules
+
+- **Narrate before every tool call.** Before invoking any tool — SysQL query, `gh` / `glab` command, `git` operation, MCP write — say what you're about to do and which tool you're using. No silent calls.
+- **Announce every skill handoff.** Before invoking another skill, name it explicitly and summarize what it'll do, then wait for confirmation.
+- **Pause for confirmation before any write.** Branch creation, commits, PR/MR opens, and ticket updates all require an explicit user yes. Read-only queries do not.
+- **One question per turn.** Never bundle compound choices ("which repo, or switch to local?"). Ask one question, wait for the answer, then ask the next.
+- **Status vocabulary.** When reporting outcomes, use `done` / `pending` / `in_progress` / `failed` / `skipped` plus a one-line detail.
 
 ## Input
 
@@ -35,115 +77,33 @@ The `ticket` argument is optional. When present, this skill updates the referenc
 
 ## State
 
-State is read and written via the Sysdig MCP server tools.
-
-| Operation | Tool | Arguments |
-|-----------|------|-----------|
-| Read state | `get_skill_state` | `{ "skill_state": "remediate" }` |
-| Write state | `save_skill_state` | `{ "skill_state": "remediate", "version": <n>, "data": { ... } }` |
-| Delete state | `delete_skill_state` | `{ "skill_state": "remediate" }` |
-
-A `null` response from `get_skill_state` means no state exists yet — start with `{ "version": 0 }`.
-Every time a skill finds something new, it should update the state and save it back.
-
-### Schema
-
-```json
-{
-  "version": 1,
-  "image_repo_mappings": [
-    {
-      "image_reference": "quay.io/myorg/my-service:1.2.3",
-      "repository": "myorg/my-service",
-      "confidence": "high",
-      "discovered": "2025-03-15"
-    }
-  ],
-  "repo_reviewers": [
-    {
-      "repository": "myorg/my-service",
-      "reviewers": ["jane-doe", "john-smith"],
-      "last_confirmed": "2025-03-15"
-    }
-  ],
-  "vulnerability_resolutions": [
-    {
-      "package": "golang",
-      "from_version": "1.20",
-      "to_version": "1.25",
-      "cves_fixed": ["CVE-2024-1234", "CVE-2024-5678"],
-      "date": "2025-03-15"
-    }
-  ],
-  "version_chains": [
-    {
-      "package": "golang",
-      "chain": [
-        { "version": "1.20", "status": "vulnerable" },
-        { "version": "1.23", "status": "skipped", "reason": "CVE-2024-9999" },
-        { "version": "1.25", "status": "clean" }
-      ],
-      "date": "2025-03-15"
-    }
-  ],
-  "remediation_history": [
-    {
-      "date": "2025-03-15",
-      "zone": { "ref_id": "123", "name": "production" },
-      "image": "quay.io/myorg/my-service:1.2.3",
-      "summary": "A short summary of the actions taken for the remediation",
-      "prs_opened": ["myorg/my-service#42"],
-      "reviewers_confirmed": ["jane-doe"],
-      "ticket_updated": "PROJ-123"
-    }
-  ]
-}
-```
-
-> **Breaking change:** earlier versions of this skill stored
-> `ticket_assignee` (top level), and `jira_tickets` / `assignee_confirmed`
-> inside `remediation_history`. Those fields have moved to the
-> `sysdig-investigate` skill state. If `get_skill_state` returns any of
-> them, ignore them — they will be dropped on the next write.
-
-### Read/write rules
-
-- **Get** the state at the start of every session (step 1) by calling the MCP tool `get_skill_state` with `{ "skill_state": "remediate" }`. A `null` response means no state exists yet — start with `{ "version": 0 }`.
-- **Save** the state at the end of every session (step 5) by calling the MCP tool `save_skill_state` with `{ "skill_state": "remediate", "version": <n>, "data": { ... } }`. Read the current contents first, merge new data (append to arrays, update existing entries by matching key fields), then pass the full merged object as `data`.
-- **Version argument** — the server uses `version` for optimistic concurrency. Pass it as a separate argument (do not include it inside `data`):
-  - First write (`get_skill_state` returned `null`) → call with `version: 0`. The server creates the record.
-  - Subsequent writes → call with the same `version` value the previous `get_skill_state` returned. On success the server bumps it; on conflict it returns 409.
-  - On 409 → call `get_skill_state` again, merge your changes into the freshly-read state, and retry once with the new version.
-- **Matching keys** for upsert:
-  - `image_repo_mappings`: match on `image_reference`
-  - `repo_reviewers`: match on `repository`
-  - `vulnerability_resolutions`: match on `package` + `from_version`
-  - `version_chains`: match on `package` + first chain entry version
-  - `remediation_history`: always append (no dedup)
-- When updating an existing entry, replace it entirely with the new version (do not deep-merge fields).
-- Dates use `YYYY-MM-DD` format.
+Read state via `get_skill_state`, write via `save_skill_state`. Schema and rules: see [references/state.md](references/state.md). Treat null as { "version": 0 }.
 
 ## Steps
 
-### 0. Prerequisites
+### 0. Trust preamble
 
-**Sysdig MCP server.** Verify that the Sysdig MCP server is available by checking that the `get_customer_settings` tool exists. If it is not available, stop and **output the message below verbatim — do not paraphrase, expand, restructure, or drop sentences**:
+**Always present this before asking any questions.** See [`references/trust-preamble.md`](references/trust-preamble.md) for the full text. After presenting the preamble, proceed directly to step 0b — the preamble is informational, do not ask for confirmation.
 
-> **Sysdig MCP server isn't reachable** (the tool `get_customer_settings` is missing). To register it in Claude Code:
->
-> ```
-> claude mcp add sysdig -- npx -y @sysdig/secure-mcp-server
-> ```
->
-> Set `SYSDIG_SECURE_API_TOKEN` and `SYSDIG_SECURE_URL` first, then re-run `/sysdig-remediate`. For other agents (Cursor, Codex, OpenCode) and troubleshooting: [`references/mcp-setup.md`](references/mcp-setup.md).
+### 0b. Prerequisites
 
-Do not proceed until the MCP server is reachable.
+Run all checks before any real work. Announce each result on its own line so the user knows which paths are open before they commit to a flow.
 
-**Source code access (mandatory).** This skill produces a code patch — without source access there is nothing to deliver. Run the selection algorithm in [`references/source_control.md`](references/source_control.md) to detect a configured GitHub (`gh`/MCP), GitLab (`glab`/MCP), or a local folder the user points at. Record the chosen `source.kind` ∈ {`github`, `gitlab`, `local`} and `source.handle` (org/group/path) in working memory; later steps key off these.
+1. **Sysdig MCP** — verify the `get_customer_settings` tool is available. Required. If it is not available or the call fails, **do not show a generic error message**. Instead, follow the "Agent diagnostic checklist" in [`references/mcp-setup.md`](references/mcp-setup.md) — run the checks in order, identify the specific failure, and report only the relevant problem and its fix to the user.
+2. **Source control** — run the selection algorithm in [`references/source_control.md`](references/source_control.md) to detect a configured GitHub (`gh`/MCP), GitLab (`glab`/MCP), or a local folder the user points at. Record `source.kind` ∈ {`github`, `gitlab`, `local`} and `source.handle` (org/group/path) in working memory; later steps key off these. Required.
+3. **Ticketing (optional)** — detect whether a ticketing MCP/CLI is reachable (Jira / Linear / GitHub Projects). Used by step 1b (adopt an existing ticket) and step 4b (PR ↔ ticket cross-link). If absent, those steps are skipped silently — do not block.
 
-If no source is reachable and the user cannot provide a local folder, stop with:
+Announce a one-line status summary, e.g.:
+
+> _Sysdig MCP: connected · <source_control_system> (`<cli_command>`): connected · <ticketing>: not connected — ticket updates will be skipped._
+
+If the **Sysdig MCP** check fails, do not proceed — the diagnostic checklist above will have already reported the specific problem and fix.
+
+If the **source control** check fails (no forge configured and the user cannot provide a local folder), stop with:
 
 > I cannot remediate `<image>` without access to its source. The skill produces a code patch — there is no useful tracking-only mode. Configure a forge or point me at a local working tree, then re-run.
+
+Do not proceed until both required checks pass.
 
 ### 1. Load project context
 
@@ -154,19 +114,24 @@ means no state exists yet — start with `{ "version": 0 }`. Note any existing:
 - `vulnerability_resolutions` — skip re-resolution if the same package+from_version was already verified clean
 - `version_chains` — skip re-analysis if the same package+version was already investigated
 
+**Resume.** If `remediation_history` has at least one entry from the last 14 days, surface a resume summary to the user before continuing — name the most recent image, the date, the PR or ticket key if present, and ask what to do next:
+
+> _"Last session: remediated `quay.io/myorg/my-service:1.2.3` on 2026-04-22 — PR myorg/my-service#42, ticket PROJ-123. Continue with a new image, refresh state for that one, or pick up where it stalled?"_
+
+Wait for the user's answer before proceeding to step 1b.
+
 ### 1b. (Optional) Best-effort search for an existing ticket
 
 Run only when **no `ticket` argument was passed in** and the skill was invoked standalone (not from `/sysdig-investigate`'s handoff). This step never creates tickets — it only discovers an existing one to adopt.
 
-1. Detect whether a ticketing MCP/CLI is reachable (Jira / Linear / GitHub Projects). For supported systems and tool surfaces, see [`sysdig-investigate/references/ticketing.md`](../../sysdig-investigate/references/ticketing.md).
-2. If none is reachable, skip this step silently.
-3. Otherwise, ask the user (default **No**): _"No ticket was passed. Search for an open ticket related to `<image_name>` first?"_
-4. If yes, search the system by image-name fragment in summaries (and the full image reference in descriptions). Filter to open tickets.
-5. Result handling:
+1. Use the ticketing availability already detected in step 0a. If none is reachable, skip this step silently. For supported systems and tool surfaces, see [`sysdig-investigate/references/ticketing.md`](../../sysdig-investigate/references/ticketing.md).
+2. Otherwise, ask the user (default **No**): _"No ticket was passed. Search for an open ticket related to `<image_name>` first?"_
+3. If yes, search the system by image-name fragment in summaries (and the full image reference in descriptions). Filter to open tickets.
+4. Result handling:
    - **Exactly one match** — show its key, summary, and assignee; ask the user to confirm adopting it.
    - **Multiple matches** — present the top 3 and let the user pick one or skip.
    - **No match** — tell the user; proceed with no ticket. Do not offer to create — direct them to `/sysdig-investigate` if they want one.
-6. If the user confirms a ticket, treat its key as if it had been passed via the `ticket:` argument for the rest of this session — step 4b will update it on PR open.
+5. If the user confirms a ticket, treat its key as if it had been passed via the `ticket:` argument for the rest of this session — step 4b will update it on PR open.
 
 ### 2. Fetch vulnerability details for selected images
 
@@ -196,7 +161,7 @@ If no Critical or High CVEs are returned, skip this image and tell the user.
 
 ### 3. Find the source repository
 
-Use the source kind selected in step 0 (`source.kind` ∈ `github` / `gitlab` / `local`). For per-provider command syntax, see [`references/source_control.md`](references/source_control.md).
+Use the source kind selected in step 0a (`source.kind` ∈ `github` / `gitlab` / `local`). For per-provider command syntax, see [`references/source_control.md`](references/source_control.md).
 
 **Local mode.** The repo is the folder. Skip the search strategies below, verify the working tree is clean (`git status --porcelain` empty — refuse if dirty), and go to step 3a.
 
@@ -217,8 +182,12 @@ Search for YAML files that reference the full image string.
 Example (GitHub): `gh search code "<image_reference>" extension:yaml org:<org>`.
 
 **ask the user:**
-If no confident match is found, present the top candidate repos to the user and ask:
-"I found these repositories that might own this image — which one is correct, or should I switch to local-folder mode?"
+If no confident match is found, ask one question at a time:
+
+1. First, present the top candidate repos: _"I found these repositories that might own this image: `<list>`. Which one, or none of these?"_
+2. Only if the user picks "none of these", ask the follow-up: _"Switch to local-folder mode? Provide a path, or cancel."_
+
+Do not bundle the two questions — wait for the answer to (1) before asking (2).
 
 IMPORTANT: If the repo does not belong to the user or any of their organizations/groups, WARN the user and ask whether to continue.
 NEVER commit or open PRs/MRs to repos that are not owned by the user or by an org/group the user belongs to.
@@ -284,28 +253,18 @@ Keep track of the full chain found (e.g. `1.20 → 1.23 → 1.25`) to include it
 
 ### 3d. Assess fixability and choose remediation action
 
-Assess what kind of fix is possible using the safe target version resolved in step 3c:
+Pick the right case based on what's fixable. Full per-case detail (action algorithm, error paths, escalation rules) lives in [`references/fix-cases.md`](references/fix-cases.md).
 
-**Case A — base OS / system package CVE (safe fix available):**
-- The CVE affects a package installed by the OS package manager (apt, yum, apk)
-- Fix: update the `FROM` line in the Dockerfile to a newer base image version, or add a `RUN apt-get upgrade` layer
-- Action: **suggest a PR** against the Dockerfile
-
-**Case B — application dependency CVE (safe fix available):**
-- The CVE affects an npm, pip, maven, go, or gem package
-- Fix: update the dependency version in the relevant manifest/lockfile
-- Action: **suggest a PR** against the dependency file
-
-**Case C — no safe fix version available:**
-- Either no patched version exists, or every candidate version introduces new Critical/High CVEs
-- Action: **no PR possible.** If a ticket key is set (via the `ticket:` argument or step 1b), append the analysis (versions checked, why none work) to that ticket via step 4b. If no ticket is set, stop and tell the user: _"No safe fix version is available. Run `/sysdig-investigate` to file a tracking ticket so this is not lost."_
-
-**Case D — repo not located within the configured source:**
-- The user has a configured forge (step 0 verified this), but step 3 failed to identify which repo owns the image build, and the user couldn't disambiguate.
-- Action: **no PR possible.** Offer to switch to `local` mode (the user provides a folder path) and re-run step 3. If they decline: if a ticket key is set, append a note to that ticket via step 4b. Otherwise stop and tell the user: _"Source repo could not be located. Provide a local folder, or run `/sysdig-investigate` to file a tracking ticket."_
+| Case | Trigger | Action |
+|------|---------|--------|
+| A | Base OS / system package CVE with safe fix | Open PR against the Dockerfile |
+| B | Application dependency CVE with safe fix | Open PR against the dependency manifest |
+| C | No safe fix version available | No PR — append analysis to ticket (if set), otherwise stop and refer to `/sysdig-investigate` |
+| D | Repo not located within configured source | No PR — offer local mode, otherwise escalate via ticket / `/sysdig-investigate` |
 
 Present the user with the proposed action before doing anything:
-"For `my-service`: I found the repo `myorg/my-service` and can open a PR to update Go from `1.20` to `1.25` (skipping `1.23` which has a Critical CVE). Shall I proceed?"
+
+> _"For `my-service`: I found the repo `myorg/my-service` and can open a PR to update Go from `1.20` to `1.25` (skipping `1.23` which has a Critical CVE). Shall I proceed?"_
 
 ### 4. Open PR (and optionally update ticket)
 
@@ -319,7 +278,8 @@ The existing-PR check already happened in step 3a — by the time you reach 4a n
 
 1. Create a new branch: `sysdig/fix-<cve-id>-<image-name>` off the default branch.
 2. Make the minimal change needed (Dockerfile FROM update, or dependency version bump), using the safe target version from step 3c.
-3. Open the PR/MR with:
+3. **Show the diff before opening.** Print the full file diff (`git diff <default-branch>..HEAD`) and the rendered PR body inline, then pause for an explicit user yes. A summary is not a substitute for the diff itself.
+4. Open the PR/MR with:
    - **Title:** `fix: patch <CVE-ID> in <image-name>`
    - **Body:**
      ```
@@ -347,6 +307,11 @@ The existing-PR check already happened in step 3a — by the time you reach 4a n
    - **Ticket cross-link:** if a ticket key is set (from the `ticket:` argument or step 1b), include `Tracking ticket: <ticket_url>` in the References section. Step 4b will mirror the link in the ticket itself, so the PR ↔ ticket relationship is bidirectional.
 
 For provider-specific syntax (`gh pr create` vs `glab mr create`, branch creation, file commits), see [`references/source_control.md`](references/source_control.md).
+
+**After the PR opens, tell the user how to undo it.** Print the rollback commands explicitly so the user has a clear path back if the change turns out to be wrong:
+
+- GitHub: `gh pr close <num> && git push origin --delete sysdig/fix-<cve-id>-<image-name>`
+- GitLab: `glab mr close <num> && git push origin --delete sysdig/fix-<cve-id>-<image-name>`
 
 **Local mode — emit a patch:**
 
@@ -384,13 +349,17 @@ h3. Resolution Details
 - Resolution chain: <installed_version> → <v1> → <safe_target_version> (only if intermediate versions skipped)
 
 h3. Status
-- <"PR opened — awaiting review" | "No safe fix available — see Case C analysis below" | "Repo not found">
+- <"done — PR opened, awaiting review" | "failed — no safe fix available (see Case C below)" | "failed — repo not found">
 ```
 
 - If a new Critical CVE was discovered relative to the existing ticket, note it but do **not** silently re-prioritise — leave priority and assignee untouched unless the user explicitly asks otherwise.
 - Report back the ticket key and URL when the update succeeds.
 
-If `ticket_key` update fails (ticket not found, permission error), warn the user and continue — do not block on the ticket update.
+If the ticket update fails, report it in the canonical what / why / fix shape, then continue — do not block on the ticket update:
+
+> _"Ticket update failed — `<reason>` (e.g. ticket not found, permission denied). Fix: `<concrete next step — re-auth, correct the ticket key, or paste the update text below into the ticket manually>`."_
+
+Always include the update text the agent was about to write so the user can apply it by hand if automation can't recover.
 
 ### 5. Update state
 
@@ -406,7 +375,7 @@ Always persist:
 - **`version_chains`** — for any fix chain with more than one step
 - **`remediation_history`** — one entry per session, always appended, including `reviewers_confirmed` and `ticket_updated` (the key of the ticket updated in step 4b, if any)
 
-> **Version on write**: pass the same `version` value returned by the `get_skill_state` call in step 1 — or `0` if the call returned `null` (no prior state). The server bumps the version itself. See [Read/write rules](#readwrite-rules). Do not include `version` inside `data`.
+> **Version on write**: pass the same `version` value returned by the `get_skill_state` call in step 1 — or `0` if the call returned `null` (no prior state). The server bumps the version itself. See [Read/write rules](references/state.md#readwrite-rules). Do not include `version` inside `data`.
 
 Update the state even if the session was partially completed (e.g. user opened a PR but skipped the ticket update).
 
@@ -433,3 +402,10 @@ At the end, present a summary table to the user:
 - Reviewer suggestions are only suggestions — always confirm with the user before requesting review.
 - In Case C/D (no PR possible) with no ticket key set (neither passed via `ticket:` nor adopted in step 1b), stop and tell the user to run `/sysdig-investigate` to file a tracking ticket.
 - This skill works on **one image at a time**. To select which image to remediate (and optionally file a tracking ticket), run `/sysdig-investigate` first.
+
+## Handoff phrasing
+
+Use these exact openings to keep the user oriented across multi-skill workflows:
+
+- **When invoked from `/sysdig-investigate`'s handoff:** _"`/sysdig-investigate` handed off `<image>` (ticket `<key>`). Loading state and starting remediation."_
+- **When a ticket is needed but none is set** (Case C/D, no `ticket:` argument, no adoption in step 1b): _"Pausing remediation — handing off to `/sysdig-investigate` to file a tracking ticket. I'll resume once you provide a ticket key."_ Then stop.

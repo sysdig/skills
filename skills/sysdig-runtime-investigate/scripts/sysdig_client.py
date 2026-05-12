@@ -9,11 +9,16 @@ import urllib.parse
 import urllib.request
 
 REGIONS = [
-    ("US East (Virginia)", "https://us2.app.sysdig.com"),
-    ("US West (Oregon)", "https://app.us4.sysdig.com"),
-    ("US West (GCP)", "https://us4.app.sysdig.com"),
-    ("EU Central (Frankfurt)", "https://eu1.app.sysdig.com"),
-    ("AP South (Sydney)", "https://app.au1.sysdig.com"),
+    ("US East (us1)", "https://secure.sysdig.com"),
+    ("US West Oregon (us2)", "https://us2.app.sysdig.com"),
+    ("US West GCP (us3)", "https://app.us3.sysdig.com"),
+    ("US West GCP Dallas (us4)", "https://app.us4.sysdig.com"),
+    ("EU Frankfurt (eu1)", "https://eu1.app.sysdig.com"),
+    ("EU Stockholm (eu2)", "https://app.eu2.sysdig.com"),
+    ("AP Sydney (au1)", "https://app.au1.sysdig.com"),
+    ("AP Mumbai (in1)", "https://app.in1.sysdig.com"),
+    ("AP Tokyo (jp1)", "https://app.jp1.sysdig.com"),
+    ("ME Dammam (me2)", "https://app.me2.sysdig.com"),
 ]
 
 

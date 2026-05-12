@@ -1,23 +1,8 @@
 # Rego Cheatsheet — Sysdig Posture custom controls
 
-A Posture custom control is a Rego rule you author and attach to Sysdig policies. This skill iterates on Rego **on disk** and validates it via the `test_posture_rego` MCP tool, then emits the final Rego into a Terraform file via the Sysdig provider. Writes to Sysdig (create / update / delete) happen through Terraform, never the API.
-
-## Iteration loop
-
-1. Pick a supported `resourceKind` — call the `list_posture_resource_kinds` MCP tool.
-2. Fetch a sample `input` for that kind — call `get_posture_resource_template` with `{ "resource_kind": "<kind>" }`.
-3. Write Rego in `control.rego` next to the target `.tf`.
-4. Validate — read `control.rego` and call `test_posture_rego` with `{ "resource_kind": "<kind>", "rego": "<file content>" }`. Interpret the `{ passed, message }` response as:
-   - `message` non-empty → **compile_error** — Rego failed to compile or evaluate; `message` has the error.
-   - `message` empty and `passed: true` → **sample_compliant** — rule evaluated `risky: false` against the fixture (your control did not flag the sample).
-   - `message` empty and `passed: false` → **sample_risky** — rule evaluated `risky: true` against the fixture (your control flagged the sample).
-
-   `passed` is the inverse of the rule's `risky` output, **not** a compile/run flag. Whether `sample_compliant` or `sample_risky` is the *desired* outcome depends on whether the fixture for that kind represents a compliant or non-compliant resource — always inspect the sample.
-5. Once green, embed the Rego into `templates/custom_control.tf` (via `file("${path.module}/control.rego")`) and run `terraform validate`.
-
 ## Resource kinds you can target
 
-Pick one supported kind — it determines the shape of `input`.
+Supported resource kinds, grouped by family. The kind determines the shape of `input`.
 
 | Family | Examples |
 |---|---|
@@ -28,7 +13,7 @@ Pick one supported kind — it determines the shape of `input`.
 | Kubernetes workloads | `DEPLOYMENT`, `STATEFULSET`, `DAEMONSET`, `CRONJOB`, `JOB`, `REPLICASET` |
 | Kubernetes network / RBAC | `INGRESS`, `SERVICE`, `NETWORKPOLICY`, `NAMESPACE`, `SECRET`, `ROLE`, `ROLEBINDING`, `CLUSTERROLE`, `CLUSTERROLEBINDING`, `SERVICEACCOUNT` |
 
-If a kind is not supported, validation fails with `resource kind not found`. Use the kind name verbatim as returned by `list_posture_resource_kinds`.
+Unsupported kinds fail validation with `resource kind not found`.
 
 ## Required Rego shape
 
@@ -56,7 +41,7 @@ The platform only looks at `risky`. `output`, `violation`, `msg`, and other conv
 
 ## What `input` looks like
 
-The fixture returned by `get_posture_resource_template` is the exact `input` that `test_posture_rego` binds during evaluation — same embedded JSON, same handler. What you see there is what the rule will see.
+Field names and casing in `input` exactly match the sample fixture — what you read there is what the rule binds to.
 
 **Cloud resources** — `input` is the resource JSON. Field names match the provider's API (e.g. Azure uses `input.properties.publicNetworkAccess`; AWS uses `input.BucketName`). Cloud resources also expose `input.Labels` (tag map) regardless of provider.
 
@@ -159,7 +144,7 @@ risky if { object.get(input, "retentionDays", 0) < 30 }
 
 ```rego
 risky if {
-  public_buckets := { b | b := input.buckets[_]; b.acl == "public-read" }
+  public_buckets := { b | some b in input.buckets; b.acl == "public-read" }
   count(public_buckets) > 0
 }
 ```
@@ -172,6 +157,16 @@ risky if {
   input.publiclyAccessible == true
 }
 ```
+
+## Style conventions
+
+These conventions emerged from the existing Sysdig posture-control corpus. Follow them so generated rules look like authored ones.
+
+- **Compare strings via `lower()`.** When matching user-supplied or cloud-provider strings, lowercase both sides (`lower(input.X) == "enabled"`). Don't introduce `upper()` or `strings.equal_fold`; the corpus has standardized on `lower()`.
+- **`==` for equality, never `=`.** Single `=` is unification, not comparison.
+- **Iterate with `some x in arr`.** Don't use the index-based `arr[_]` pattern; the corpus has standardized away from it.
+- **`contains(lower(x), lower(needle))` for fuzzy substring matches.** For exact tokens (IPs, ARN prefixes, state strings) use literal `==`.
+- **Scope rules to the subset they apply to.** When a check is meaningful only for some instances of a kind, guard with the qualifying conditions first so the rule doesn't fire (or fail silently) on instances where the check doesn't apply.
 
 ## Limitations
 
@@ -189,10 +184,9 @@ risky if {
 - Wrong package name — only `package sysdig` is queried; anything else evaluates to nothing.
 - Returning a value (`risky := "yes"`) or a set (`risky[x] if ...`) — `risky` must be a scalar bool.
 - Assuming the shape from provider docs instead of the sample — always look at the real `input` from `get_posture_resource_template` for your kind to see the true field names and casing (e.g. Azure camelCase under `input.properties`, AWS PascalCase at the top level).
+- Misjudging when to use `not input.X`. The fixture is one snapshot; real data may omit fields entirely. Two related traps:
+  - **Underdefensive**: if absence implies the risky state, you need `not input.Field` explicitly. Functions like `count()` and `some x in X` evaluate to undefined when the field is missing and don't fire — so missing fields silently pass under `default risky := false`.
+  - **Overdefensive**: for a boolean field where absence and `false` should both flag, `not input.Field` already covers both. Don't add a redundant `input.Field == false` branch.
 - Using `http.send` — rejected at compile time (`unsafe built-in function calls in expression: http.send`).
 - Using `import data.*` or helper libraries — no external data is available; everything must come from `input`.
 - Expecting `output` to populate violation details — it doesn't.
-
-## Why this skill doesn't write controls via the API
-
-Posture control write endpoints exist and work, but this skill writes controls exclusively through the Sysdig Terraform provider. The value is a reviewable, committable `.tf` file the user owns — direct API writes skip that entirely. Translate any control mutation you see in older Sysdig material into attributes on `sysdig_secure_posture_control`.

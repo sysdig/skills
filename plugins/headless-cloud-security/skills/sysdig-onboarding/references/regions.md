@@ -14,6 +14,7 @@ Check the URL you use to log into Sysdig Secure:
 | `app.eu2.sysdig.com` | EU North (eu2) |
 | `app.au1.sysdig.com` | AP Sydney (au1) |
 | `app.in1.sysdig.com` | AP Mumbai (in1) |
+| `app.jp1.sysdig.com` | AP Tokyo (jp1) |
 | `app.me2.sysdig.com` | ME South (me2) |
 
 ---
@@ -91,6 +92,15 @@ Check the URL you use to log into Sysdig Secure:
 | API | `https://app.in1.sysdig.com/api` |
 | Collector | `ingest.in1.sysdig.com` |
 | Sysdig Secure URL (Terraform) | `https://app.in1.sysdig.com` |
+
+### Asia Pacific — Tokyo (jp1)
+
+| Endpoint | URL |
+|----------|-----|
+| Secure UI | `https://app.jp1.sysdig.com` |
+| API | `https://app.jp1.sysdig.com/api` |
+| Collector | _see [official docs](https://docs.sysdig.com/en/docs/administration/saas-regions-and-ip-ranges/)_ |
+| Sysdig Secure URL (Terraform) | `https://app.jp1.sysdig.com` |
 
 ### Middle East — Dammam (me2)
 

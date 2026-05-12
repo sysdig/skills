@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "sysdig": {
+    "secure-mcp-server": {
       "command": "npx",
       "args": ["-y", "@sysdig/secure-mcp-server"],
       "env": {

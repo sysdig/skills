@@ -13,6 +13,7 @@ Base URL by region (see [regions.md](regions.md) for full list):
 - EU North (eu2): `https://app.eu2.sysdig.com`
 - AP Sydney (au1): `https://app.au1.sysdig.com`
 - AP Mumbai (in1): `https://app.in1.sysdig.com`
+- AP Tokyo (jp1): `https://app.jp1.sysdig.com`
 - ME South (me2): `https://app.me2.sysdig.com`
 
 API paths are appended to the base URL, e.g. `https://secure.sysdig.com/api/cloudauth/v1/accounts`.

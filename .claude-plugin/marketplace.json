@@ -1,16 +1,19 @@
 {
   "name": "sysdig-skills",
   "owner": {
-    "name": "Sysdig"
-  },
-  "metadata": {
-    "description": "Sysdig's cloud security expertise, packaged as agent skills."
+    "name": "Sysdig",
+    "url": "https://github.com/draios"
   },
   "plugins": [
     {
       "name": "headless-cloud-security",
+      "description": "Sysdig's cloud security expertise, packaged as agent skills that work natively in your AI environment.",
+      "version": "0.1.2",
       "source": "./plugins/headless-cloud-security",
-      "description": "Sysdig's cloud security expertise, packaged as agent skills that work natively in your AI environment."
+      "author": {
+        "name": "Sysdig",
+        "url": "https://github.com/sysdig/skills"
+      }
     }
   ]
 }

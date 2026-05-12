@@ -34,7 +34,13 @@ Do not pick a kind, fetch a sample, or write any files yet.
 
 From the user's description, derive a candidate value for every row in the field table:
 
-- **Resource kind** — call the `list_posture_resource_kinds` MCP tool once (no arguments). Map the cloud / service mentioned (e.g. "S3 bucket") to the canonical kind from that list (`AWS_S3_BUCKET`). The casing returned by the tool is what the API and the Terraform provider expect — use it verbatim. If the description is ambiguous between several kinds (e.g. "EC2" → instance vs. volume vs. security group), keep all plausible candidates as a shortlist; resolve in step 3.
+- **Resource kind**
+  - Call the `list_posture_resource_kinds` MCP tool once (no arguments). Map the cloud / service mentioned (e.g. "S3 bucket") to the canonical kind from that list (`AWS_S3_BUCKET`). The casing returned by the tool is what the API and the Terraform provider expect — use it verbatim.
+  - If the description is ambiguous between several kinds (e.g. "EC2" → instance vs. volume vs. security group), keep all plausible candidates as a shortlist; resolve in step 3.
+  - When parent and child / per-feature kinds for the same concept both appear in the list:
+    - Keep both candidates on the shortlist.
+    - Call `get_posture_resource_template` against each *before* step 3 to compare shapes.
+    - Decide from the user's intent — which population they want flagged. Fixtures show field shapes, not population coverage. When intent is ambiguous, surface the choice to the user in step 3.
 - **Control name** — derive from the intent (e.g. `S3 - Buckets must enforce encryption at rest`) if the user didn't state one.
 - **Description** — condense the user's own words into a single short line.
 - **Severity** — only set if the user explicitly stated it; otherwise leave blank for step 3.
@@ -42,7 +48,7 @@ From the user's description, derive a candidate value for every row in the field
 - **Remediation details** — extract if mentioned; otherwise leave blank.
 - **Target directory** — default to cwd unless the user implied a different path.
 
-Do not fetch the sample input or write files in this step.
+Beyond the parent / child disambiguation fetches noted above, do not fetch sample inputs or write files in this step.
 
 ### 3. Confirm fields in one round
 
@@ -53,6 +59,10 @@ The user either confirms the summary, edits values inline, or rejects. Re-ask on
 ### 4. Fetch the sample `input`
 
 Call the `get_posture_resource_template` MCP tool with `{ "resource_kind": "<kind>" }`. The tool returns the sample JSON object. Show only the fields that look relevant to the user's rule (full samples can be hundreds of lines — don't dump the whole thing).
+
+When you elide fields, say so: *"Showing 6 of 47 fields from this sample — say 'show full sample' to see them all."* Never silently truncate.
+
+If you already fetched this kind's fixture in step 2 to disambiguate parent / child candidates, reuse it instead of refetching.
 
 Use this sample to ground the Rego: field names and casing match what the platform passes to `input` at evaluation time. The sample is also exactly what `test_posture_rego` will bind to `input` in step 6 — same embedded fixture, same handler — so what you read here is what your rule will see.
 
@@ -77,13 +87,13 @@ Translate the user's plain-language intent into Rego, referencing the sample `in
 
 ### 6. Iterate with `test_posture_rego`
 
-For each revision: read `control.rego` from disk and call `test_posture_rego` with `{ "resource_kind": "<kind>", "rego": "<file content>" }`. Interpret the `{ passed, message }` response as three states (full mapping in [rego-cheatsheet.md](rego-cheatsheet.md#iteration-loop)):
+For each revision: read `control.rego` from disk and call `test_posture_rego` with `{ "resource_kind": "<kind>", "rego": "<file content>" }`. The tool returns `{ passed, message }`. The pair encodes three states:
 
-- `message` non-empty → **compile_error** — read `message`; consult the cheatsheet's *Common mistakes*.
-- `message` empty, `passed: true` → **sample_compliant** — rule did not flag the fixture.
-- `message` empty, `passed: false` → **sample_risky** — rule flagged the fixture.
+- `message` non-empty → **compile_error** — Rego failed to compile or evaluate; `message` has the error. Consult the cheatsheet's *Common mistakes*.
+- `message` empty, `passed: true` → **sample_compliant** — rule evaluated `risky: false` against the fixture (your control did not flag the sample).
+- `message` empty, `passed: false` → **sample_risky** — rule evaluated `risky: true` against the fixture (your control flagged the sample).
 
-Neither `sample_compliant` nor `sample_risky` is universally good — compare against what the user expects against the step-4 fixture: a non-compliant fixture should produce `sample_risky`, a compliant one `sample_compliant`. Adjust and retry until expectation matches.
+`passed` is the inverse of the rule's `risky` output, **not** a compile/run flag. Neither `sample_compliant` nor `sample_risky` is universally good — compare against the step-4 fixture: a non-compliant fixture should produce `sample_risky`, a compliant one `sample_compliant`. Adjust and retry until expectation matches.
 
 When useful, walk through a second mental sample (the opposite case). The API only evaluates against the embedded fixture, so this is reasoning-only.
 
@@ -115,7 +125,7 @@ terraform plan
 
 Preflight already confirmed the provider can authenticate — either from env vars in this shell or from the user's existing provider configuration. If `terraform plan` returns a credentials error anyway, surface it and re-run preflight.
 
-Present the plan summary. Offer `terraform apply` — only on explicit user approval.
+Present the plan summary. Offer `terraform apply` — only on explicit user approval. When asking, include the undo path: *"To undo this later: run `terraform destroy` in this directory, or remove the `sysdig_secure_posture_control` block and re-apply."*
 
 ### 9. Offer the next step
 

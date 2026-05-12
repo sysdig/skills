@@ -66,6 +66,7 @@ REGIONS=(
   "us3|https://app.us3.sysdig.com/api|https://app.us3.sysdig.com"
   "au1|https://app.au1.sysdig.com/api|https://app.au1.sysdig.com"
   "in1|https://app.in1.sysdig.com/api|https://app.in1.sysdig.com"
+  "jp1|https://app.jp1.sysdig.com/api|https://app.jp1.sysdig.com"
   "me2|https://app.me2.sysdig.com/api|https://app.me2.sysdig.com"
 )
 

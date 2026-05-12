@@ -24,6 +24,8 @@ What you need depends on the goal from step 1:
 
 Present a concise summary — policy names with active/inactive status, and control names with resource kind. Do not dump raw JSON into chat.
 
+State the counts when listing: *"Found 12 custom policies (3 active) and 18 custom controls."* If the list is long enough that you trim it, say what's hidden and how to see the rest. Never silently truncate.
+
 #### Listing custom policies
 
 Call the `list_posture_policies` MCP tool with `{ "is_custom": true, "is_active": true }`. The tool returns `{ data, totalCount }`; use `data` as-is — `list_posture_policies` is not paginated.
@@ -100,7 +102,7 @@ terraform plan
 
 Preflight already confirmed the provider can authenticate — either from env vars in this shell or from the user's existing provider configuration. If `terraform plan` returns a credentials error anyway, surface it and re-run preflight.
 
-Present the plan summary. Offer `terraform apply` — only on explicit user approval.
+Present the plan summary. Offer `terraform apply` — only on explicit user approval. When asking, include the undo path: *"To undo this later: run `terraform destroy` in this directory, or remove the `sysdig_secure_posture_policy` block (or just the new `requirement` / `control` entry you added) and re-apply."*
 
 ### 6. Set expectations
 

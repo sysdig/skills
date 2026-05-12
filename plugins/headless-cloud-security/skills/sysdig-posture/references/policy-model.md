@@ -57,8 +57,3 @@ After `terraform apply`, the policy exists but is **not evaluated** until it is 
 **Policies → Posture Policies → [policy name] → Zones**
 
 This skill does not create, modify, delete, or assign zones.
-
-## Known limitations
-
-- **GCP custom controls** may not return evaluation data even when the policy is correctly assigned to a zone (known platform bug).
-- **Custom policies filtered by zone** may not evaluate correctly in some tenants (known platform bug). If results are missing after a scan, check the policy is assigned to "Entire Infrastructure" as a fallback.

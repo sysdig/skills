@@ -44,12 +44,14 @@ Once installed, describe what you need in plain language. Examples:
 
 ### Set up credentials
 
-Skills auto-discover Sysdig credentials from your environment. Export them in your shell profile:
+The skills that call the Sysdig REST API or Terraform provider directly (`sysdig-api`, `sysdig-onboarding`, `sysdig-posture`) auto-discover credentials from your environment. Export them in your shell profile:
 
 ```bash
 export SYSDIG_SECURE_URL="https://us2.app.sysdig.com"     # your Sysdig region URL
 export SYSDIG_SECURE_API_TOKEN="your-api-token"
 ```
+
+The hosted Sysdig **MCP server** does not use these variables — it is registered separately and authenticates via OAuth (see [Register the Sysdig MCP server](#register-the-sysdig-mcp-server) below).
 
 **Sysdig region URLs:**
 
@@ -64,6 +66,7 @@ export SYSDIG_SECURE_API_TOKEN="your-api-token"
 | AP Sydney (au1) | `https://app.au1.sysdig.com` |
 | AP Mumbai (in1) | `https://app.in1.sysdig.com` |
 | ME South — Dammam (me2) | `https://app.me2.sysdig.com` |
+| AP Tokyo (jp1) | `https://app.jp1.sysdig.com` |
 
 **Never paste credentials in chat.** Skills read them from environment variables only.
 
@@ -77,7 +80,19 @@ export SYSDIG_SECURE_API_TOKEN="your-api-token"
 /plugin install headless-cloud-security@sysdig-skills
 ```
 
-The marketplace install loads everything automatically: the plugin skills, the Sysdig MCP server (`.mcp.json`), and any per-skill MCP server dependencies declared in `agents/*.yaml`.
+The marketplace install loads the plugin skills and any per-skill MCP server dependencies declared in `agents/*.yaml`. The hosted Sysdig MCP server is **not** bundled — register it separately (next step).
+
+### Register the Sysdig MCP server
+
+Most skills reach your tenant through the hosted Sysdig MCP server. Register it once, pointing at your region's MCP URL (your region URL + `/mcp/secure`):
+
+```bash
+claude mcp add --transport http secure-mcp-server https://us2.app.sysdig.com/mcp/secure
+```
+
+Then run `/mcp` → `secure-mcp-server` → **Authenticate** for the one-time OAuth sign-in. No API token is needed for the MCP server.
+
+> The hosted MCP server is available in the regions listed in each skill's `references/mcp-setup.md` region table — that table is the source of truth. If your region isn't listed, self-host the Sysdig MCP server and register that URL instead. For other agents (Cursor, OpenAI Codex, OpenCode, Claude Desktop, ChatGPT, Gemini, …), register an HTTP MCP server at your region's `/mcp/secure` URL with OAuth — see each skill's `references/mcp-setup.md`.
 
 ### Compatibility with other agents
 
@@ -112,7 +127,7 @@ ln -s ~/sysdig-skills/skills/* <agent-skills-dir>/
 
 #### MCP server registration
 
-The `.mcp.json` and per-skill MCP server dependencies that ship inside `plugins/headless-cloud-security/` are **not** loaded by either of the two methods above. You must register the Sysdig MCP server — and any other MCP servers a skill depends on (Jira, GitHub, …) — with your agent yourself. For Claude Code, prefer the marketplace install above; it loads everything automatically.
+The Sysdig MCP server is never bundled — you register it yourself with `claude mcp add` (see [Register the Sysdig MCP server](#register-the-sysdig-mcp-server) above) regardless of install method. Per-skill `agents/*.yaml` dependencies on other MCP servers (Jira, GitHub, …) are also **not** loaded by either of the two methods above; register those with your agent yourself too.
 
 ## Skills shipped today
 
@@ -135,7 +150,6 @@ skills/
 ├── plugins/
 │   └── headless-cloud-security/          # the published Claude Code plugin
 │       ├── .claude-plugin/plugin.json
-│       ├── .mcp.json                     # Sysdig MCP server declaration
 │       └── skills/<skill-name>/          # one directory per skill
 └── skills/
     └── <skill-name>/                     # bare-skill mirror (spec-compliant)

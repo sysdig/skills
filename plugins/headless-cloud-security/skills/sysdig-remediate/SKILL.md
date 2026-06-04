@@ -31,11 +31,11 @@ allowed-tools:
   - Bash(glab mr list*)
   - Bash(glab mr view*)
   - Bash(glab mr close*)
-  - mcp__sysdig__get_customer_settings
-  - mcp__sysdig__get_skill_state
-  - mcp__sysdig__save_skill_state
-  - mcp__sysdig__delete_skill_state
-  - mcp__sysdig__run_sysql
+  - mcp__secure-mcp-server__get_customer_settings
+  - mcp__secure-mcp-server__get_skill_state
+  - mcp__secure-mcp-server__save_skill_state
+  - mcp__secure-mcp-server__delete_skill_state
+  - mcp__secure-mcp-server__run_sysql
 ---
 
 ## First-run notice (Public Beta)
@@ -89,7 +89,7 @@ Read state via `get_skill_state`, write via `save_skill_state`. Schema and rules
 
 Run all checks before any real work. Announce each result on its own line so the user knows which paths are open before they commit to a flow.
 
-1. **Sysdig MCP** — verify the `get_customer_settings` tool is available. Required. If it is not available or the call fails, **do not show a generic error message**. Instead, follow the "Agent diagnostic checklist" in [`references/mcp-setup.md`](references/mcp-setup.md) — run the checks in order, identify the specific failure, and report only the relevant problem and its fix to the user.
+1. **Sysdig MCP authentication preflight** — required. Run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. If it tells you to abort, abort — do not call any MCP tools or perform other side effects. If a tool call later fails during normal operation, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md) to identify the specific failure.
 2. **Source control** — run the selection algorithm in [`references/source_control.md`](references/source_control.md) to detect a configured GitHub (`gh`/MCP), GitLab (`glab`/MCP), or a local folder the user points at. Record `source.kind` ∈ {`github`, `gitlab`, `local`} and `source.handle` (org/group/path) in working memory; later steps key off these. Required.
 3. **Ticketing (optional)** — detect whether a ticketing MCP/CLI is reachable (Jira / Linear / GitHub Projects). Used by step 1b (adopt an existing ticket) and step 4b (PR ↔ ticket cross-link). If absent, those steps are skipped silently — do not block.
 

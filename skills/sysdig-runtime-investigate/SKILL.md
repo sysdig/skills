@@ -18,12 +18,26 @@ allowed-tools:
   - AskUserQuestion
   - WebFetch
   - Bash(env*)
-  - Bash(*fetch_threats*)
-  - Bash(*fetch_events*)
-  - Bash(*fetch_vulns*)
   - Bash(curl *ipinfo.io*)
   - Bash(curl *ip-api.com*)
   - Bash(curl *events.pagerduty.com*)
+  - mcp__secure-mcp-server__get_skill_state
+  - mcp__secure-mcp-server__save_skill_state
+  - mcp__secure-mcp-server__list_runtime_events
+  - mcp__secure-mcp-server__count_runtime_events
+  - mcp__secure-mcp-server__discover_runtime_event_field_values
+  - mcp__secure-mcp-server__get_event_info
+  - mcp__secure-mcp-server__get_event_process_tree
+  - mcp__secure-mcp-server__list_threats_engine_groups
+  - mcp__secure-mcp-server__get_threats_engine_group
+  - mcp__secure-mcp-server__get_threats_engine_threat
+  - mcp__secure-mcp-server__list_threats_engine_threats_by_group
+  - mcp__secure-mcp-server__list_threats_engine_resources_by_group
+  - mcp__secure-mcp-server__run_sysql
+  - mcp__secure-mcp-server__list_vulnerability_findings_by_image
+  - mcp__secure-mcp-server__list_runtime_scan_results
+  - mcp__secure-mcp-server__get_scan_result
+  - mcp__secure-mcp-server__fetch_threat_intelligence_feed
 ---
 
 ## First-run notice (Public Beta)
@@ -146,28 +160,13 @@ Preflight   Surface     Investigate    Synthesise + report
 
 ### Phase 0 — Preflight
 
-0. **Trust Preamble.** Always present this before doing anything else. See [`references/trust-preamble.md`](references/trust-preamble.md) for the full text. After presenting the preamble, proceed directly to Step 0b — do NOT ask for confirmation. The preamble is informational.
+0. **Trust Preamble.** Always present this before doing anything else. See [`references/trust-preamble.md`](references/trust-preamble.md) for the full text. After presenting the preamble, proceed directly to Step 0a — do NOT ask for confirmation. The preamble is informational.
 
-0b. **Read shared state.** Call `mcp__secure-mcp-server__get_skill_state` with `{ "skill_state": "runtime-investigate" }`. A `null` response means no prior state — start with `{ "version": 0 }`. If state exists, hydrate `preferred_jira_project`, `preferred_handoff`, and `recent_cases` onto the working session so Phase 3 can default to the user's prior choices instead of re-asking. Skip silently if the Sysdig MCP isn't loaded — the skill still runs without persistence.
+0a. **MCP authentication preflight.** Before any other step — including the state read below — run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. This skill **requires** the Sysdig MCP: it is the only source for Threats Engine, runtime events, process trees, SysQL, vulnerability scans, and the threat-intel feed. If the preflight returns State 2 (registered but not authenticated) or State 3 (not reachable), emit its verbatim message and **stop** — no data calls, no state read, no file writes. Do NOT call `mcp__secure-mcp-server__authenticate` autonomously. Only continue past this step on State 1 (catalog reachable).
 
-1. **Sysdig credentials (hard-block).** Probe for both a token and a host before any call:
+0b. **Read shared state.** Call `mcp__secure-mcp-server__get_skill_state` with `{ "skill_state": "runtime-investigate" }`. A `null` response means no prior state — start with `{ "version": 0 }`. If state exists, hydrate `preferred_jira_project`, `preferred_handoff`, and `recent_cases` onto the working session so Phase 3 can default to the user's prior choices instead of re-asking.
 
-   ```bash
-   env | grep -iE 'SYSDIG.*(TOKEN|KEY)' >/dev/null && echo "token-found" || echo "TOKEN-MISSING"
-   env | grep -iE 'SYSDIG.*(HOST|URL)'  >/dev/null && echo "host-found"  || echo "HOST-MISSING"
-   ```
-
-   If either reports `MISSING`, stop and surface the regions table plus `export` commands. Do not start Phase 1 until both are bound.
-
-   Export the canonical pair: `export SYSDIG_SECURE_URL='<region URL>'` and `export SYSDIG_SECURE_API_TOKEN='<token>'`. See [`references/sysdig-regions.md`](references/sysdig-regions.md) for the per-region host URLs and legacy env-var names.
-
-2. **Sysdig MCP probe.** Scan available tool names for any matching `mcp__secure-mcp-server__*`. The skill is bundled with the Sysdig MCP server (declared in the plugin's `.mcp.json`); if it's loaded you get higher-quality enrichment for free. Record the boolean `mcp_sysdig_available` for downstream phases.
-
-   The MCP unlocks: SysQL queries (Phase 2 sibling/posture lookups), real process trees (Phase 2), and Sysdig's threat-intelligence feed (Phase 2 network enrichment). When the MCP is **not** available, those steps degrade gracefully — the case still renders, just thinner.
-
-   If `mcp_sysdig_available` is false and the user wants the richer enrichment, point them at [`references/mcp-setup.md`](references/mcp-setup.md) — it covers the `claude mcp add secure-mcp-server` command and equivalents for Cursor / Codex / OpenCode.
-
-3. **Reporting / CTI (cyber threat intelligence) probe (no-block).** Detect available destinations and CTI tools dynamically. Do not require any specific env-var name — match by pattern.
+1. **Reporting / CTI (cyber threat intelligence) probe (no-block).** Detect available destinations and CTI tools dynamically. Do not require any specific env-var name — match by pattern.
 
    - Jira / case tracking: scan for MCP tools matching `mcp__atlassian__*`, `mcp__*jira*`, `mcp__*linear*`. Mark the first match.
    - Jira project key: scan env vars matching `*JIRA_PROJECT*` (e.g. `SYSDIG_RUNTIME_JIRA_PROJECT`). If matched, surface the value as the default project for Phase 3 handoff.
@@ -176,18 +175,17 @@ Preflight   Surface     Investigate    Synthesise + report
 
    Record what was found. Do **not** prompt yet if nothing was detected — defer that to Phase 3 handoff.
 
-4. **Announce connectivity.** Before moving on, surface a single user-facing line summarising what's wired up and what's degraded. Mark each integration `✓` (detected), `—` (missing), or `✗` (probe failed). Examples:
+2. **Announce connectivity.** Before moving on, surface a single user-facing line summarising what's wired up. Mark each integration `✓` (detected), `—` (missing), or `✗` (probe failed). The Sysdig MCP is always `✓` here — Step 0a already guaranteed it. Example:
 
-   - `Connectivity: Sysdig ✓ · MCP ✓ · Jira ✓ · PagerDuty — · VirusTotal —. Will skip binary VT enrichment and PagerDuty handoff.`
-   - `Connectivity: Sysdig ✓ · MCP — · Jira ✓ · PagerDuty ✓ · VirusTotal ✓. SysQL / process-tree / threat-intel-feed enrichment will be skipped — the case still renders, thinner.`
+   - `Connectivity: Sysdig MCP ✓ · Jira ✓ · PagerDuty — · VirusTotal —. Will skip binary VT enrichment and PagerDuty handoff.`
 
    This is the only narration during Phase 0 — the per-step results above are recorded silently on the case object. Don't prompt; just inform.
 
-5. **Entry-point detection.** Parse the invocation argument:
+3. **Entry-point detection.** Parse the invocation argument:
    - No argument → `interactive` mode.
    - Anything else → `directed` mode, store the value as the event ID.
 
-6. **Resume check (directed mode only).** If `recent_cases` (from step 0) has an entry whose `event_id` matches the current trigger, surface a one-line resume summary and ask the user via `AskUserQuestion` how to proceed:
+4. **Resume check (directed mode only).** If `recent_cases` (from step 0b) has an entry whose `event_id` matches the current trigger, surface a one-line resume summary and ask the user via `AskUserQuestion` how to proceed:
 
    > "You investigated `<event_id>` <N> hours ago — case file `<case_file>`, handoff `<destination>:<key>` if any. Continue with the saved case, refresh (re-run Phase 2), or start fresh (clear the prior entry)?"
 
@@ -203,16 +201,9 @@ Preflight   Surface     Investigate    Synthesise + report
 
 **Interactive flow:**
 
-1. Try Threats Engine first (no MCP equivalent yet — vendored script):
+1. List the top open threats — Threats Engine is exposed via MCP. Call `mcp__secure-mcp-server__list_threats_engine_groups` with `limit=5`, sorted by `lastSignal:desc`, `status=open`.
 
-   ```bash
-   python3 $SKILL_DIR/scripts/fetch_threats.py --list 5
-   ```
-
-   If the script exits with code 2 (Threats Engine unavailable in the tenant), fall back to the events API:
-
-   - If `mcp_sysdig_available` → call `mcp__secure-mcp-server__list_runtime_events` with last 24h, limit 10.
-   - Otherwise → `python3 $SKILL_DIR/scripts/fetch_events.py --recent --hours 24 --limit 10`.
+   If Threats Engine returns empty (unavailable or quiet in this tenant), fall back to runtime events for the same window: `mcp__secure-mcp-server__list_runtime_events` with last 24h, limit 10.
 
 2. Present the result as a markdown table:
 
@@ -227,20 +218,11 @@ Preflight   Surface     Investigate    Synthesise + report
 
 **Directed flow:**
 
-1. Try Threats Engine (vendored script — same reason as above):
-
-   ```bash
-   python3 $SKILL_DIR/scripts/fetch_threats.py --threat <event_id>
-   ```
-
-   If the script exits 2, fall back to the events API:
-
-   - If `mcp_sysdig_available` → call `mcp__secure-mcp-server__get_event_info` with the event ID.
-   - Otherwise → `python3 $SKILL_DIR/scripts/fetch_events.py --event <event_id>`.
+1. Resolve the specific threat. The trigger ID may be a threat ID, a group ID, or an event ID — try in that order: `mcp__secure-mcp-server__get_threats_engine_threat` (single-threat detail); on 404 `mcp__secure-mcp-server__get_threats_engine_group`, then `mcp__secure-mcp-server__list_threats_engine_threats_by_group` with the ID; if all 404, fall back to `mcp__secure-mcp-server__get_event_info` with the event ID.
 
 **Classification — MITRE ATT&CK tactic.** From the rule name, rule source, and event labels, assign one MITRE tactic to the threat. Store it on the case as `case.tactic`. Phase 2 watchlist mapping reads this value. See [`references/mitre-tactics.md`](references/mitre-tactics.md) for the keyword-to-tactic table and the secondary-tactic rule.
 
-**Process tree (preferred — Sysdig MCP).** If `mcp_sysdig_available` and the threat has an `event_id` (the Threats Engine returns `securityEvent` references with IDs), call `mcp__secure-mcp-server__get_event_process_tree` with the event ID to retrieve the structured process tree. Store the parsed result (parent → child chain, command lines, sha256 if present) on `case.process_tree`.
+**Process tree (Sysdig MCP).** If the threat has an `event_id` (the Threats Engine returns `securityEvent` references with IDs), call `mcp__secure-mcp-server__get_event_process_tree` with the event ID to retrieve the structured process tree. Store the parsed result (parent → child chain, command lines, sha256 if present) on `case.process_tree`.
 
 **Process evidence from `aiGeneratedDescription` (always runs — useful even alongside the structured tree).** The description carries natural-language context the structured tree doesn't ("locale repeatedly", "curl --upload to external IP"). Parse it for process names (e.g. `systemd`, `sshd`, `bash`, `curl`, `wget`, `nc`, `nslookup`) and chain hints ("spawned by", "child of"). Store as `case.process_evidence` (list of strings).
 
@@ -257,7 +239,7 @@ Tell the user what you're doing as you go. Examples of good status updates:
 - "Process tree shows Tomcat → bash → xmrig — looks like miner persistence. Looking for related cluster activity."
 - "IMDS (Instance Metadata Service) theft on the host. Expanding to CloudTrail in the same AWS account."
 - "Found two more threat groups on the same account in the same hour — folding them in as the same campaign."
-- "Vuln scan for the image rejected — falling back to MCP image-findings."
+- "Runtime scan for the workload came back empty — pulling image-level vuln findings instead."
 
 #### Available signals (chase them when relevant)
 
@@ -271,9 +253,9 @@ These are the ingredients. The order is yours.
   - `kubernetes.cluster.name = "<cluster>" and source = "k8s_audit"` (Attach/Exec Pod, Deployment Created, etc.)
   - `kubernetes.cluster.name = "<cluster>" and source = "cloudtrail"` (cluster-tagged cloud events, if any)
 - **Cloud-account-wide activity** when the resource has `aws.accountId` / `azure.subscriptionId` / `gcp.projectId`. CloudTrail / agentless-aws-ml / agentless-okta-ml events live under the *account* dimension, not the cluster. **This is the difference between catching multi-stage cross-cloud attacks (IMDS credential theft → IAM access-key creation → CloudTrail tampering → S3 exfiltration) and missing them.** Filter: `aws.accountId = "<account>" and source in ("cloudtrail", "agentless-aws-ml")`.
-- **Other threat groups in this incident** — fold them into the same case — do not investigate separately. Other threat groups already tagged in Phase 1 as part of this incident — pull their constituent events / resources via `fetch_threats.py --group <id>` to merge into the chain. If new groups appear in the cluster window during Phase 2 investigation, fold them in too. Cross-type is allowed: a CLOUD threat may be the same incident as a K8S_WORKLOAD threat.
+- **Other threat groups in this incident** — fold them into the same case — do not investigate separately. Other threat groups already tagged in Phase 1 as part of this incident — pull their constituent events via `mcp__secure-mcp-server__list_threats_engine_threats_by_group` and their affected resources via `mcp__secure-mcp-server__list_threats_engine_resources_by_group` (both keyed by the group ID) to merge into the chain. If new groups appear in the cluster window during Phase 2 investigation, fold them in too. Cross-type is allowed: a CLOUD threat may be the same incident as a K8S_WORKLOAD threat.
 - **Sibling resources / posture / RBAC (role-based access control)** via `mcp__secure-mcp-server__run_sysql`. SysQL schema differs between tenants — adjust query shape if rejected. Example queries: `MATCH KubeWorkload AS wl WHERE wl.cluster = '<c>' RETURN wl.namespace, wl.name`, `MATCH Resource VIOLATES Control`, `MATCH KubeServiceAccount HAS KubeRoleBinding HAS KubeClusterRole`.
-- **Vulnerability surface** — `python3 $SKILL_DIR/scripts/fetch_vulns.py` (with `--cluster --namespace --workload`, `--host`, or `--host --image`). On `scan_found: false` or image-label rejection, fall back to `mcp__secure-mcp-server__list_vulnerability_findings_by_image` with the image digest from the threat detail.
+- **Vulnerability surface** — start with `mcp__secure-mcp-server__list_vulnerability_findings_by_image` using the image digest from the threat detail (server-side filtering by severity / exploit / fix). For running/in-use package detail — which vulnerable packages are actually loaded on the workload or host — use `mcp__secure-mcp-server__list_runtime_scan_results` (filter by `kubernetes.cluster.name`/`namespace`/`workload` or `host.hostName`, sort `runningVulnTotalBySeverity`) and pass the returned `resultId` to `mcp__secure-mcp-server__get_scan_result` for the full packages + vulnerabilities breakdown.
 - **External CTI** for the top 5 critical/high CVEs that pass the MITRE-tactic gate (see `references/correlation-guide.md`): NVD, CISA KEV (Known Exploited Vulnerabilities), Exploit-DB, GHSA (GitHub Security Advisory) via `WebFetch`. Don't fetch CTI for tactic-mismatched CVEs.
 - **Sysdig threat-intel feed** via `mcp__secure-mcp-server__fetch_threat_intelligence_feed` — Sysdig-curated CVEs / zero-days / active-attack notes. Cross-reference any IOCs you collect.
 - **VirusTotal (VT)** for binary IOCs when a SHA256 surfaces on event fields and a VT key is present (Phase 0 records the env var). When the threat lacks `proc.sha256`, look across other events on the same container — drift detection events typically carry the hash.
@@ -298,7 +280,7 @@ If you find yourself making more than ~4 follow-on calls per signal, stop and sy
 
 ### Phase 3 — Synthesise & report
 
-Three steps, in this order:
+Four steps, in this order:
 
 1. **Ask the user for the report format** via `AskUserQuestion`: "How do you want the report rendered? `Markdown` (default — plays nice with Jira/PagerDuty handoff) / `HTML` (renders Mermaid diagrams in browser, self-contained) / `Both`."
 
@@ -332,7 +314,7 @@ If the user picks **Edit** at the preview step, ask which fields to change, appl
 
 After handoff, surface the link/key (if any) to the user — one short line.
 
-4. **Persist shared state.** Before exiting, call `mcp__secure-mcp-server__save_skill_state` with `{ "skill_state": "runtime-investigate", "version": <version-from-phase-0>, "data": { ... } }`. Merge the freshly-read state from Phase 0 with the new entries: append this case to `recent_cases` (upsert by `event_id`, cap at 10), update `last_run`, and update `preferred_jira_project` / `preferred_handoff` if the user picked a destination. Skip silently if the Sysdig MCP isn't loaded.
+4. **Persist shared state.** Before exiting, call `mcp__secure-mcp-server__save_skill_state` with `{ "skill_state": "runtime-investigate", "version": <version-from-phase-0>, "data": { ... } }`. Merge the freshly-read state from Phase 0 with the new entries: append this case to `recent_cases` (upsert by `event_id`, cap at 10), update `last_run`, and update `preferred_jira_project` / `preferred_handoff` if the user picked a destination.
 
 ## Error Handling
 
@@ -347,13 +329,13 @@ After handoff, surface the link/key (if any) to the user — one short line.
 
 **User-facing error template.** Every error message the user sees follows three lines: **what** failed, **why**, and the **fix** (a copy-pasteable command or concrete next step). Keep the whole thing under four lines. Examples:
 
-> Can't reach Sysdig — neither `SYSDIG_SECURE_API_TOKEN` nor `SYSDIG_SECURE_URL` is set.
-> Pick your region from `references/sysdig-regions.md` and run:
-> `export SYSDIG_SECURE_URL=… && export SYSDIG_SECURE_API_TOKEN=…` then retry.
+> Can't reach Sysdig — the MCP server isn't registered or authenticated.
+> Register it with `claude mcp add --transport http secure-mcp-server https://<region>/mcp/secure`, then run `/mcp` → Sysdig → Authenticate.
+> Per-region URLs are in references/mcp-setup.md. Then re-run.
 
 > No threats matched the last 24h.
 > Either the tenant is quiet or the time window is too tight.
-> Widen with `--hours 168` (7 days) or pick a specific event ID.
+> Widen the time window (e.g. 7 days) or pick a specific event ID.
 
 > Couldn't open the Jira ticket — Atlassian MCP returned 403.
 > Your token doesn't have `write:jira-work` for project `RUNTIME`.
@@ -363,12 +345,10 @@ Truncation, skipped enrichments, and other partial-success cases must be flagged
 
 | Situation | Behavior |
 |-----------|----------|
-| Sysdig auth missing | Stop in Phase 0 with the regions table and `export` instructions. No data calls. |
-| `fetch_threats.py --threat <id>` returns 404 | Script auto-falls-back to `--group <id>` (and tags the result `{ "resolved_as": "group" }`); if both 404, fall back to events API for the same ID. |
+| Sysdig MCP preflight returns State 2 or State 3 | Abort in Phase 0a per `auth-preflight.md` — emit its verbatim message and stop. No data calls, no state read, no file writes. |
+| Trigger ID resolves to neither a threat nor a group (`get_threats_engine_threat`, `get_threats_engine_group`, and `list_threats_engine_threats_by_group` all 404) | Fall back to `mcp__secure-mcp-server__get_event_info` with the same ID. If that 404s too, tell the user the ID wasn't found and offer interactive mode. |
 | No qualifying threats / events found in Phase 1 | Tell the user, offer to widen the time window. |
-| `fetch_vulns.py` returns `scan_found: false` | Try `mcp__secure-mcp-server__list_vulnerability_findings_by_image` with the image digest from the threat detail. If still nothing, record `{ "vulnerabilities": { "status": "skipped", "reason": "no scan data" } }` and continue. |
-| `fetch_vulns.py --image` rejected (HTTP 400 on scope label) | Script already retries with alternate label candidates; if all fail, fall back to MCP `list_vulnerability_findings_by_image`. |
-| Sysdig MCP not loaded | SysQL / process tree / threat-intel-feed unavailable. Record `{ "status": "skipped", "reason": "MCP not loaded" }` for each affected section. The investigation still produces a case from threats + events + vulns + external CTI. |
+| Vulnerability lookup empty | When `mcp__secure-mcp-server__list_vulnerability_findings_by_image` returns no findings, try `mcp__secure-mcp-server__list_runtime_scan_results` (filter by workload/host) then `mcp__secure-mcp-server__get_scan_result`. If still nothing, record `{ "vulnerabilities": { "status": "skipped", "reason": "no scan data" } }` and continue. |
 | `WebFetch` to a public CTI source fails or rate-limits | Mark that source `{ "status": "failed", "reason": "<rate-limited \| network \| 4xx>" }` and continue. Don't retry in a loop. |
 | VirusTotal API key not detected | Record `{ "vt": { "status": "skipped", "reason": "no API key" } }`. |
 | No Jira and no PagerDuty detected | Ask whether the user wants to configure one or just show the file path. |

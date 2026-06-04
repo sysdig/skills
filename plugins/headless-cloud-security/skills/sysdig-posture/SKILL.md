@@ -46,7 +46,7 @@ Help users author Posture custom controls and custom policies for Sysdig Secure,
 ## Principles
 
 - **Terraform-only writes.** Never create, update, or delete Posture resources through the API. Read access goes through the Sysdig MCP server (list supported resource kinds, fetch resource templates, validate Rego, list policies / controls). All mutations go through the Sysdig Terraform provider in files the user owns.
-- **Credential auto-discovery.** Detect the Sysdig token and URL from environment variables. Never hardcode them, and never ask the user to paste secrets in chat. The MCP server and the Terraform provider both read `SYSDIG_SECURE_API_TOKEN` and `SYSDIG_SECURE_URL`.
+- **Credential auto-discovery.** Detect the Sysdig token and URL from environment variables. Never hardcode them, and never ask the user to paste secrets in chat. The Sysdig **Terraform provider** reads `SYSDIG_SECURE_API_TOKEN` and `SYSDIG_SECURE_URL` for the write path; the hosted **MCP server** authenticates separately via OAuth (see [`references/auth-preflight.md`](references/auth-preflight.md)) and does not read those env vars.
 - **File-first Rego loop.** Rego lives in a real file next to the `.tf`. Read the file and pass its content to the `test_posture_rego` MCP tool to validate. Show diffs and test results in chat, not the full Rego each turn.
 - **Human approves destructive ops.** `terraform apply` and `terraform destroy` require explicit user confirmation. `init`, `plan`, `validate`, and read-only MCP tool calls run proactively.
 - **No shell redirections in Bash.** Never use `>`, `>>`, `|`, or `2>&1` in Bash tool calls — they break `allowed-tools` matching.
@@ -57,11 +57,13 @@ Help users author Posture custom controls and custom policies for Sysdig Secure,
 
 ## Prerequisites and credentials
 
-### MCP availability
+### MCP authentication preflight
 
-Verify that the Sysdig MCP server is available by checking that the `get_customer_settings` tool exists. If it is not available or the call fails, **do not show a generic error message**. Instead, follow the "Agent diagnostic checklist" in [`references/mcp-setup.md`](references/mcp-setup.md) — run the checks in order, identify the specific failure, and report only the relevant problem and its fix to the user.
+Before any other step, run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. If it tells you to abort, abort — do not call any MCP tools or perform other side effects.
 
-Do not proceed until the MCP server is reachable. The same env vars are picked up by the Sysdig Terraform provider, so once the MCP check passes, `terraform plan/apply` will authenticate from the same place.
+If a tool call later fails during normal operation, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md) to identify the specific failure.
+
+Do not proceed until the MCP server is reachable. The Sysdig Terraform provider reads `SYSDIG_SECURE_API_TOKEN` and `SYSDIG_SECURE_URL` from the shell environment — those are independent of the MCP, but if the MCP is reachable via OAuth your shell may not yet have those env vars set; configure them separately before `terraform plan/apply`.
 
 ### Local tools
 
@@ -91,7 +93,7 @@ echo "${SYSDIG_SECURE_API_TOKEN:+SET}"
 - **Either prints empty** → ask the user whether their target directory already has a `provider "sysdig"` block that handles credentials its own way:
   - *Yes* → proceed; trust the user's existing setup. The generated `versions.tf` will be skipped at the generation step if their `versions.tf` already exists.
   - *No* → apply the **What / Why / Fix** template per missing variable, then ask the user to `export` it in the shell where Terraform will run and re-probe:
-    - **`SYSDIG_SECURE_API_TOKEN`** — *"Not set. Needed so the Sysdig provider and the MCP server can authenticate. Set it with `export SYSDIG_SECURE_API_TOKEN=<your token>` and re-run."*
+    - **`SYSDIG_SECURE_API_TOKEN`** — *"Not set. Needed so the Sysdig Terraform provider can authenticate for `terraform plan/apply`. Set it with `export SYSDIG_SECURE_API_TOKEN=<your token>` and re-run."*
     - **`SYSDIG_SECURE_URL`** — *"Not set. Needed so the Sysdig provider knows which region to talk to. Set it with `export SYSDIG_SECURE_URL=https://secure.sysdig.com` (or your regional URL) and re-run."*
   - Never accept a token in chat.
 

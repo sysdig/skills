@@ -44,13 +44,12 @@ with the Sysdig backend over TLS on port 6443 (collector) or 443 (API).
 
 ## 3. Supported Platforms
 
-| Distribution          | Architectures  |
-|-----------------------|----------------|
-| Debian / Ubuntu       | x86_64, ARM64  |
-| CentOS / RHEL         | x86_64, ARM64  |
-| Amazon Linux 2 / 2023 | x86_64, ARM64  |
-| SLES                  | x86_64         |
-| Alpine                | x86_64         |
+| Distribution            | Architectures  |
+|-------------------------|----------------|
+| Debian / Ubuntu         | x86_64, ARM64  |
+| CentOS / RHEL / Fedora  | x86_64, ARM64  |
+| Amazon Linux 2 / 2023   | x86_64, ARM64  |
+| SLES                    | x86_64         |
 
 ---
 
@@ -86,9 +85,8 @@ Also collect:
   (e.g., "Ubuntu 22.04", "Amazon Linux 2023")
 - **Install method** — one of:
   - `deb` — DEB package (Debian/Ubuntu)
-  - `rpm` — RPM package (CentOS/RHEL/Amazon Linux/SLES)
+  - `rpm` — RPM package (CentOS/RHEL/Fedora/Amazon Linux/SLES)
   - `docker` — Privileged Docker container
-  - `binary` — Standalone binary (Alpine or custom environments)
 
 ---
 
@@ -97,25 +95,21 @@ Also collect:
 ### 5.1 DEB Package (Debian / Ubuntu)
 
 ```bash
-curl -sS https://download.sysdig.com/stable/deb/sysdig.gpg.key | apt-key add -
-echo "deb https://download.sysdig.com/stable/deb stable-$(dpkg --print-architecture)/" \
+curl -s https://download.sysdig.com/DRAIOS-GPG-KEY.public \
+  -o /usr/share/keyrings/sysdig-keyring.asc
+echo "deb [signed-by=/usr/share/keyrings/sysdig-keyring.asc] https://download.sysdig.com/stable/deb stable-$(dpkg --print-architecture)/" \
   > /etc/apt/sources.list.d/sysdig.list
 apt-get update
+apt-get install -y linux-headers-$(uname -r)
 apt-get install -y draios-agent
 ```
 
-### 5.2 RPM Package (CentOS / RHEL / Amazon Linux / SLES)
+### 5.2 RPM Package (CentOS / RHEL / Fedora / Amazon Linux / SLES)
 
 ```bash
-rpm --import https://download.sysdig.com/stable/rpm/draios-signing.key
-cat > /etc/yum.repos.d/draios.repo <<'EOF'
-[draios]
-name=Draios
-baseurl=https://download.sysdig.com/stable/rpm/$basearch
-enabled=1
-gpgcheck=1
-gpgkey=https://download.sysdig.com/stable/rpm/draios-signing.key
-EOF
+rpm --import https://download.sysdig.com/DRAIOS-GPG-KEY.public
+curl -s -o /etc/yum.repos.d/draios.repo https://download.sysdig.com/stable/rpm/draios.repo
+yum install -y kernel-devel-$(uname -r)
 yum install -y draios-agent
 ```
 
@@ -125,30 +119,28 @@ Use this method when you cannot install native packages or prefer an isolated
 deployment. The container requires privileged mode and host namespaces to
 access kernel interfaces.
 
+The example below uses the **Universal eBPF** driver, which does not need a
+separate kernel module/probe bootstrap step (requires kernel 5.8+). For
+kernel-module or legacy-eBPF drivers — which require running a paired
+`quay.io/sysdig/agent-kmodule` container first to build and load the probe —
+refer to the [official docs](https://docs.sysdig.com/en/sysdig-secure/classic-container-agent/).
+
 ```bash
 docker run -d --name sysdig-agent \
+  --restart always \
   --privileged --net host --pid host \
-  -v /var/run/docker.sock:/host/var/run/docker.sock \
-  -v /dev:/host/dev \
-  -v /proc:/host/proc:ro \
-  -v /boot:/host/boot:ro \
-  -v /lib/modules:/host/lib/modules:ro \
-  -v /usr:/host/usr:ro \
-  -v /etc:/host/etc:ro \
+  -e SYSDIG_AGENT_DRIVER=universal_ebpf \
   -e ACCESS_KEY={{SYSDIG_ACCESS_KEY}} \
   -e COLLECTOR={{COLLECTOR_ENDPOINT}} \
-  quay.io/sysdig/agent
+  -v /var/run/docker.sock:/host/var/run/docker.sock \
+  -v /proc:/host/proc:ro \
+  -v /sys/kernel/debug:/sys/kernel/debug:ro \
+  --shm-size=512m \
+  quay.io/sysdig/agent-slim
 ```
 
 Replace `{{SYSDIG_ACCESS_KEY}}` and `{{COLLECTOR_ENDPOINT}}` with values from
 Sysdig Secure → Settings → Agent Installation.
-
-### 5.4 Binary (Alpine / Custom Environments)
-
-Download the standalone binary from
-`https://download.sysdig.com/stable/bin/` matching the target architecture,
-mark it executable, and run it with the same environment variables as the
-Docker method.
 
 ---
 
@@ -159,7 +151,7 @@ Docker method.
 For DEB/RPM installs, the agent reads its configuration from:
 
 ```
-/etc/sysdig/dragent.yaml
+/opt/draios/etc/dragent.yaml
 ```
 
 Use the template at `templates/dragent.yaml` as a starting point. Copy it to
@@ -251,8 +243,9 @@ systemctl restart dragent
    ```bash
    curl -v telnet://collector.sysdigcloud.com:6443
    ```
-2. If a proxy is required, set `http_proxy` in the `dragent.yaml` or in the
-   systemd unit's environment file (`/etc/sysdig/dragent.env`).
+2. If a proxy is required, set `http_proxy` in `dragent.yaml`, or via the
+   distro-specific environment file (`/etc/default/dragent` on DEB,
+   `/etc/sysconfig/dragent` on RPM).
 3. Verify the `collector` value matches the Sysdig region (see table above).
 
 ### High CPU Usage

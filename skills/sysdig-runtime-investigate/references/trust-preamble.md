@@ -25,5 +25,5 @@ runtime investigation session:
 > **Tools used:** Sysdig API and MCP, optional VirusTotal, public threat-intel
 > feeds, Atlassian for Jira, and the PagerDuty Events API.
 
-After presenting the preamble, proceed directly to Step 0b — do NOT ask for
+After presenting the preamble, proceed directly to Step 0a — do NOT ask for
 confirmation.

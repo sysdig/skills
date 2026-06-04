@@ -1,0 +1,129 @@
+- Can you list all my critical vulnerabilities with a fix across all my workloads?
+- What are my aws regions?
+- How many <resource-type> do I have in each AWS region?
+- How many <resource-type> are in each AWS region?
+- What are the pods in <cluster-name> cluster?
+- List all the images that have <cve-name> vulnerability
+- What are my pods?
+- Can you show my exposed resources?
+- Can you retrieve my <registry-name>?
+- Can you show me my <registry-name> images?
+- Can you show me my images where pull string contains <registry-name> ?
+- Can you show me my containers with platform <registry-name> ?
+- Can you list my Kubernetes clusters? Add info about the platform
+- Do I have any resource <resource-type> with failed controls?
+- Can you list my top 10 vulnerabilities?
+- Can you list my top 10 vulnerabilities by number of affected workload?
+- Give me the most exposed resource I have
+- Give me the most exposed resource I have. Sort by vulnerability count
+- How many cloud build resources do I have?
+- Show cloud build resources
+- How many resources from <registry-vendor-name> do I have?
+- What are my <resource-type> with name that contains <name> for the account with name that contains <name>.
+- how many <resource-type> are in each AWS region?
+- List all resources in AWS account with ID <acount-id>
+- Show all resources affected by critical vulns
+- List all <resource-type> in AWS
+- What Kubernetes clusters do I have running in AWS?
+- What is running in the Kubernetes cluster named <cluster-name>?
+- Which k8s namespaces are generating runtime events?
+- Which kubernetes clusters are generating the most events?
+- Which IAM Users own the <resource-type> in my infrastructure?
+- Show the resources owned by <user-name> <user-surname>
+- Show the images in <registry-vendor-name>
+- Show the images in <registry-vendor-name>
+- How many buckets do I have in each AWS region?
+- Which AWS regions have the most critical vulnerabilities?
+- Show the findings for the AWS <resource-type> <resource-name>
+- Show the findings for the AWS <resource-type> containing <resource-name>
+- Show the k8s clusters in AWS
+- How many <resource-type> do I have?
+- Which resources contain vulnerabilities that are critical and in use?
+- Show the resources affected by a critical vulnerablity in AWS
+- Show the resources affected by a critical vulnerability
+- Show the number of resources affected by a critical vulnerability by cloud GCP
+- How many <resource-type> are exposed to the internet?
+- Show the EC2 instances that have access to the S3 buckets that are exposed to the internet
+- How many <resource-type> do I have in each region?
+- Which of my <resource-type> are vulnerable?
+- show me the most critical vulnerabilities that are in use in my GCP environments
+- how many critical vulnerabilities in use are in AWS?
+- who are the admin users just in AWS?
+- what types of storage resources do I have?
+- Which packages are contained in aws resources of region <region-name>?
+- which k8s namespaces are generating runtime events?
+- show the k8s clusters in aws
+- what are my risks?
+- what are my findings?
+- Which ingress is exposing k8s service <resource-name>?
+- What's the control that is the least failed on across k8s nodes?
+- Can you show buckets in <region-name>?
+- who are the owners of my buckets
+- which problems i should fix?
+- Container with critical vulnerability
+- Which resources in AWS are exposed to the internet?
+- Which organizations in AWS have the account named <account-name>?
+- Show me the aws <resource-type> where the <package-name> package is installed
+- Which resources in AWS are failing network controls?
+- Which workloads are vulnerable to <cve-name>?
+- Which k8s deployments are vulnerable to <cve-name>?
+- Which containers do I have where package <package-name> is flagged as in-use?
+- Tell me the zone with less <resource-type> that I have
+- What's the package installed the most across aws resources?
+- Give me the k8s service exposing more workloads
+- What's the k8s cluster with most exposed workloads?
+- List all Kubernetes namespaces that have runtime events
+- List my aws users
+- show the resources owned by <user-email>
+- Which IAM Users own the <resource-type> in my infrastructure?
+- what are my distinct aws regions?
+- Show the findings for the AWS <resource-type>
+- what are my workloads at risk
+- what are the admin users in AWS
+- what are my critical in use vulns?
+- what are my k8sclusters
+- what are the top types of resources in AWS
+- Tell me more of IAM user <user-name>
+- what are my kubernets workloads for each kubernetes cluster?
+- what are iam users violating controls
+- What are the iam users that have <resource-type>?
+- Host with vulnerable package in use
+- tell me more about container with name <container-name>
+- Which cloud IAM users have MFA disabled?
+- which resources violates control with name that contains <control-name>
+- which resources violates control `<control-name>`
+- List the AWS users in each regions.
+- List the users in each regions.
+- List the Azure users in each regions.
+- Controls violated by <resource-type>.
+- Which <resource-type> are exposing resources?
+- which Kubernetes services are exposing replication controllers?
+- which Kubernetes services are exposing ReplicationControllers?
+- which Kubernetes services are exposing cron jobs?
+- Which resources generate events with policy <events-policy-name>?
+- What are my images with critical vulnerabilities? Sort by severity.
+- Rank the resources by vulnerability impact.
+- What are my images affected by vulnerabilities?
+- Do I have the image <image-reference> running in my environment?
+- which AWS regions have kubernetes workloads running?
+- Identify the Kubernetes deployment with the most critical vulnerabilities among the deployments in my environment
+- list all containers with a vulnerable package <package-name>
+- show me the 5 most recent critical risks affecting exposed workloads
+- EC2 instances which exposed to internet
+- Show all object storage buckets that are publicly accessible
+- Show details of secrets with findings
+- Show all critical run time events
+- Show me all IAM roles that grant admin privileges in the <account-name> account
+- show all IAM roles with a finding
+- show all exposed <resource-type>
+- Show me <resource-type> resources with failing controls
+- What containers are in ECR?
+- What <resource-type> resources are running?
+- What <resource-type> cloud resources are running?
+- Which images have the most in-use vulnerable packages with high or greater severity vulnerabilities?
+- Show me gcp nodes with compliance violations
+- List GCP nodes with control failures
+- List all resources in AWS Account
+- Show me VPC resources that are misconfigured
+- list vulnerabilities with lower than High severity
+- find workloads affected by vulnerabilities with severity greater than Medium

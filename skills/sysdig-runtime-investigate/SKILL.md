@@ -89,8 +89,8 @@ These are the rules of the game. **Phases are a floor, not a ceiling.** The chos
 - **Two-tier output.** The full case goes to a markdown file in `/tmp`. The user sees a 2-paragraph summary in chat plus the file path.
   - Do: keep tables, evidence dumps, and long traces in the file.
   - Don't: paste tables into chat; force the user to scroll for the verdict.
-- **Read-only by design.** This skill investigates and reports only. Remediation goes to `sysdig-remediate`.
-  - Do: hand off to `sysdig-remediate` when the user wants to fix something.
+- **Read-only by design.** This skill investigates and reports only. Remediation goes to `sysdig-runtime-remediate` (for live response actions on the running threat) or `sysdig-remediate` (for image-level CVE fixes).
+  - Do: hand off to `sysdig-runtime-remediate` when the user wants to act on the live threat (kill, isolate, pause), or to `sysdig-remediate` when the fix is a vulnerable image.
   - Don't: run `kubectl delete`, `terraform apply`, or any destructive operation directly.
 - **Always classify with MITRE.** Assign one MITRE ATT&CK tactic to the trigger event — it drives the correlation gate and the watchlist mapping.
   - Do: pick the more specific tactic when two could apply; record the secondary on `case.tactic_secondary`.
@@ -314,7 +314,14 @@ If the user picks **Edit** at the preview step, ask which fields to change, appl
 
 After handoff, surface the link/key (if any) to the user — one short line.
 
-4. **Persist shared state.** Before exiting, call `mcp__secure-mcp-server__save_skill_state` with `{ "skill_state": "runtime-investigate", "version": <version-from-phase-0>, "data": { ... } }`. Merge the freshly-read state from Phase 0 with the new entries: append this case to `recent_cases` (upsert by `event_id`, cap at 10), update `last_run`, and update `preferred_jira_project` / `preferred_handoff` if the user picked a destination.
+4. **Offer to act on the threat (optional handoff to remediation).** After the reporting handoff is complete (or skipped), ask via `AskUserQuestion`: _"Want me to act on this threat now? `sysdig-runtime-remediate` will propose response actions (kill, isolate, pause, etc.), explain the consequences on the live workload, and execute only what you approve."_ Options: `Yes — invoke sysdig-runtime-remediate` / `No`.
+
+   - On **Yes** — announce the handoff explicitly per principle C-03 (_"Handing off to `sysdig-runtime-remediate` with `<event_id>`. The case file you just generated will be its starting context."_), then invoke `sysdig-runtime-remediate <event_id>`.
+   - On **No** — proceed silently to step 5. The user can always come back later with `/sysdig-runtime-remediate <event_id>` — the case file and shared state will still be there.
+
+   Skip this step if `sysdig-runtime-remediate` is not registered in the current plugin (back-compat for environments running an older Bloom).
+
+5. **Persist shared state.** Before exiting, call `mcp__secure-mcp-server__save_skill_state` with `{ "skill_state": "runtime-investigate", "version": <version-from-phase-0>, "data": { ... } }`. Merge the freshly-read state from Phase 0 with the new entries: append this case to `recent_cases` (upsert by `event_id`, cap at 10), update `last_run`, and update `preferred_jira_project` / `preferred_handoff` if the user picked a destination. Skip silently if the Sysdig MCP isn't loaded.
 
 ## Error Handling
 

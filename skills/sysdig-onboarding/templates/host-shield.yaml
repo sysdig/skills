@@ -1,0 +1,168 @@
+# Host Shield Configuration Template
+#
+# Copy to /opt/draios/etc/dragent.yaml on the target host.
+# Replace all {{PLACEHOLDER}} markers with actual values.
+# Remove feature sections that are not enabled, along with the pair of
+# delimiter comments that wrap them (the "OPEN NAME" / "END NAME" comment
+# lines below). Never introduce that delimiter syntax outside a real pair —
+# scripts/lint_config.sh reads it literally and reports an unclosed marker.
+#
+# {{SYSDIG_API_URL}}, {{COLLECTOR_HOST}} and {{COLLECTOR_PORT}} are mandatory
+# for every region, SaaS included — resolve them from the region table in
+# host-shield.md §7.2. Omitting them disables host posture and host
+# vulnerability scanning silently, while the runtime checks still pass.
+
+sysdig_endpoint:
+  access_key: "{{SYSDIG_ACCESS_KEY}}"
+  # `region` is a shorthand only some components resolve; the agent runtime
+  # ignores it and falls back to the us1 collector with an EMPTY API endpoint.
+  # Always emit api_url + collector explicitly, SaaS included — host posture
+  # (KSPM) and host vulnerability scanning are silently disabled without
+  # api_url. Values per region: host-shield.md §7.2.
+  region: {{SYSDIG_REGION}}
+  api_url: {{SYSDIG_API_URL}}
+  collector:
+    host: {{COLLECTOR_HOST}}
+    port: {{COLLECTOR_PORT}}
+  # On-prem: set region: custom and point api_url / collector at your
+  # own endpoints.
+
+cluster_config:
+  name: "{{HOST_IDENTIFIER}}"
+
+system:
+  driver_type: {{DRIVER_TYPE}}
+  root_path: /
+  runtimes:
+    docker:
+      - socket: unix:///var/run/docker.sock
+        mandatory: false
+    podman:
+      - socket: /run/podman/podman.sock
+        mandatory: false
+
+log_level: warn
+log_persist: true
+monitoring_port: 8080
+
+# TLS with certificate verification is the default (`ssl: true` +
+# `ssl_verify_certificate: true`) — emit NO ssl keys unless a custom CA is
+# needed. In this file `ssl` is a BOOLEAN: an `ssl:` mapping with a `verify:`
+# child is rejected ("Critical, configuration: Config file error at key: ssl")
+# and the agent refuses to start.
+# === CUSTOM_CA ===
+# Path to the PEM CA bundle on the host (absolute, or relative to
+# /opt/draios/etc). Keep verification on.
+ca_certificate: "{{CA_CERT_PATH}}"
+ssl_verify_certificate: true
+# === END CUSTOM_CA ===
+
+# === PROXY ===
+# The agent runtime reads a nested `http_proxy` mapping (host + port, not a
+# URL). A top-level `proxy:` block with http_proxy/https_proxy/no_proxy URL
+# strings is the Helm-chart form and is IGNORED in this file — the agent would
+# connect direct. Derive host/port from the proxy URL the user gave.
+http_proxy:
+  proxy_host: "{{PROXY_HOST}}"
+  proxy_port: {{PROXY_PORT}}
+  ssl: {{PROXY_SSL}}                 # true only if the proxy endpoint is https
+  ssl_verify_certificate: true
+# The posture (kspm-analyzer) and host-scanner subprocesses inherit the service
+# environment rather than this file: also set HTTP_PROXY / HTTPS_PROXY /
+# NO_PROXY in /etc/default/dragent (DEB) or /etc/sysconfig/dragent (RPM), then
+# restart. See host-shield.md §7.5.
+# === END PROXY ===
+
+features:
+  detections:
+    syscall_detections:
+      enabled: true
+    dns_detection:
+      enabled: false
+    # === DRIFT_CONTROL ===
+    drift_control:
+      enabled: true
+    # === END DRIFT_CONTROL ===
+    # === MALWARE_CONTROL ===
+    malware_control:
+      enabled: true
+    # === END MALWARE_CONTROL ===
+    # === ML_POLICIES ===
+    ml_policies:
+      enabled: true
+    # === END ML_POLICIES ===
+    hash_detection:
+      enabled: false
+
+  investigations:
+    # === ACTIVITY_AUDIT ===
+    activity_audit:
+      enabled: true
+      commands_enabled: true
+      connections_enabled: true
+      files_enabled: true
+    # === END ACTIVITY_AUDIT ===
+    # === CAPTURES ===
+    captures:
+      enabled: true
+    # === END CAPTURES ===
+    # === LIVE_LOGS ===
+    live_logs:
+      enabled: true
+    # === END LIVE_LOGS ===
+    # === NETWORK_SECURITY ===
+    network_security:
+      enabled: true
+    # === END NETWORK_SECURITY ===
+    event_forwarder:
+      enabled: false
+
+  posture:
+    # === HOST_POSTURE ===
+    host_posture:
+      enabled: true
+    # === END HOST_POSTURE ===
+
+  respond:
+    rapid_response:
+      enabled: false
+    # === RESPONSE_ACTIONS ===
+    response_actions:
+      kill_process:
+        trigger: all
+      kill_container:
+        trigger: all
+      pause_container:
+        trigger: all
+      stop_container:
+        trigger: all
+      file_quarantine:
+        trigger: all
+        quarantine_path: ./quarantine
+      file_acquire:
+        trigger: all
+      capture:
+        trigger: all
+    # === END RESPONSE_ACTIONS ===
+
+  vulnerability_management:
+    # === HOST_VM ===
+    host_vulnerability_management:
+      enabled: true
+      host:
+        enabled: true
+        # No dirs_to_scan here: the standard OS package dirs are scanned by
+        # default, and the agent runtime types this key as a comma-separated
+        # string — a YAML list is a fatal config error. To add extra dirs use
+        #   host_scanner:
+        #     additional_host_dirs_to_scan: "/opt/app,/srv"
+    # === END HOST_VM ===
+    # === CONTAINER_VM ===
+    container_vulnerability_management:
+      enabled: true
+      target_workloads:
+        non_orchestrated_containers:
+          enabled: true
+    # === END CONTAINER_VM ===
+    in_use:
+      enabled: true

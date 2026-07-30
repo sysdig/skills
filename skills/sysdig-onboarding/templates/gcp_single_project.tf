@@ -4,10 +4,20 @@
 # Provider: GCP | Scope: Single Project
 #
 # Instructions:
-#   1. Replace all {{PLACEHOLDER}} values with your actual values
-#   2. Remove any feature sections you don't need (between === markers)
-#   3. Run: export SYSDIG_SECURE_API_TOKEN="<your-token>"
-#   4. Run: terraform init && terraform plan && terraform apply
+#   1. FIRST enable the required GCP APIs — apply templates/gcp_api_enablement.tf
+#      in a separate folder (see that file's header). This is the wizard's
+#      "Set Up GCP APIs" step and must complete before this config.
+#   2. Replace all {{PLACEHOLDER}} values with your actual values.
+#   3. Remove any feature sections you don't need (between === markers).
+#   4. Provide the token via env: export TF_VAR_sysdig_secure_api_token="<token>"
+#      (the skill sources it from .sysdig-token — never hardcode it here).
+#   5. Run: terraform init && terraform plan && terraform apply
+#
+# Feature model (all GA in the sysdiglabs/secure/google modules):
+#   Foundational (always): Inventory + Posture & Compliance (CSPM) and
+#     Basic Identity Capabilities (CIEM Basic).
+#   Additional (opt-in): Threat Detection (CDR via Pub/Sub), Advanced Identity
+#     Analysis (CIEM Advanced — needs CDR), Host Scanning (VM), Workload Scanning.
 
 terraform {
   required_version = ">= 1.10.0"
@@ -18,7 +28,7 @@ terraform {
     }
     google = {
       source  = "hashicorp/google"
-      version = ">= 4.21.0"
+      version = ">= 5.0"
     }
   }
 }
@@ -36,21 +46,23 @@ provider "google" {
 }
 
 # --- Onboarding (always required) ---
-# Registers this GCP project with Sysdig Secure and creates
+# Registers this GCP project with Sysdig Secure and creates the
 # service accounts + workload identity pools.
 
 module "onboarding" {
   source     = "sysdiglabs/secure/google//modules/onboarding"
+  version    = "~> 2.0"
   project_id = "{{GCP_PROJECT_ID}}"
 }
 
-# === CSPM (Cloud Security Posture Management) ===
-# Creates a service account with viewer roles for resource inventory
-# and compliance evaluation.
+# === CSPM (Posture & Compliance + Inventory) ===
+# Foundational, always included. Creates a service account with viewer roles
+# for resource inventory and compliance evaluation.
 
 module "config-posture" {
   source                   = "sysdiglabs/secure/google//modules/config-posture"
-  project_id               = "{{GCP_PROJECT_ID}}"
+  version                  = "~> 2.0"
+  project_id               = module.onboarding.project_id
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 }
 
@@ -64,11 +76,15 @@ resource "sysdig_secure_cloud_auth_account_feature" "config_posture" {
 
 # === END CSPM ===
 
-# === CIEM Basic (Cloud Identity & Entitlement Management) ===
-# Analyzes IAM roles and policies for overly permissive access.
-# Uses the same posture data as CSPM — no additional infrastructure.
-# NOTE: Keep this block even when enabling CIEM Advanced — advanced
-# builds on top of basic via concat() on its components.
+# === CIEM Basic (Basic Identity Capabilities) ===
+# Foundational, always included. Analyzes configuration-based IAM risks and
+# identity hygiene using the same posture data as CSPM — no extra infrastructure.
+# NOTE: two separate upgrades sit on top of Basic Identity —
+#   (1) usage-based least-privilege analysis = the CIEM Advanced block below
+#       (needs CDR / Pub-Sub), and
+#   (2) Workspace user/group directory insights = a MANUAL domain-wide
+#       delegation step in the Google Admin Console after apply (see
+#       references/gcp.md §5; cannot be automated with Terraform).
 
 resource "sysdig_secure_cloud_auth_account_feature" "identity_entitlement_basic" {
   account_id = module.onboarding.sysdig_secure_account_id
@@ -87,13 +103,15 @@ resource "sysdig_secure_cloud_auth_account_feature" "identity_entitlement_basic"
 
 # === END CIEM Basic ===
 
-# === CDR (Cloud Detection & Response) ===
-# Forwards audit logs via Pub/Sub PUSH subscription for real-time
-# threat detection.
+# === CDR (Threat Detection) ===
+# Forwards GCP Audit Logs to Sysdig via a Pub/Sub PUSH subscription for
+# real-time threat detection. Keep this block when Threat Detection — or
+# Advanced Identity Analysis (which builds on it) — is selected.
 
 module "pub-sub" {
   source                   = "sysdiglabs/secure/google//modules/integrations/pub-sub"
-  project_id               = "{{GCP_PROJECT_ID}}"
+  version                  = "~> 2.0"
+  project_id               = module.onboarding.project_id
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 }
 
@@ -107,25 +125,20 @@ resource "sysdig_secure_cloud_auth_account_feature" "threat_detection" {
 
 # === END CDR ===
 
-# === CIEM Advanced (upgrades CIEM Basic) ===
-# Least-privilege analysis based on actual usage patterns.
-# Requires BOTH config-posture AND pub-sub data.
-# NOTE: Requires the CIEM Basic block above — advanced uses concat()
-# to build on basic's components.
+# === CIEM Advanced (Advanced Identity Analysis) ===
+# Usage-based least-privilege analysis on top of Basic Identity. Requires the
+# CDR (Pub/Sub) data source above — keep the CDR block when this is enabled.
 
 resource "sysdig_secure_cloud_auth_account_feature" "identity_entitlement_advanced" {
   account_id = module.onboarding.sysdig_secure_account_id
   type       = "FEATURE_SECURE_IDENTITY_ENTITLEMENT"
   enabled    = true
-  components = concat(
-    tolist(sysdig_secure_cloud_auth_account_feature.identity_entitlement_basic.components),
-    [module.pub-sub.pubsub_datasource_component_id]
-  )
-  depends_on = [
-    module.pub-sub,
-    module.pub-sub.post_ciem_basic_delay
-  ]
-  flags = { "CIEM_FEATURE_MODE" : "advanced" }
+  # tolist(): the basic feature's `components` is a set; concat() requires
+  # lists/tuples, so plan fails ("all arguments must be lists or tuples; got
+  # set of string") without this wrap. (The upstream module example omits it.)
+  components = concat(tolist(sysdig_secure_cloud_auth_account_feature.identity_entitlement_basic.components), [module.pub-sub.pubsub_datasource_component_id])
+  depends_on = [module.pub-sub, sysdig_secure_cloud_auth_account_feature.identity_entitlement_basic, module.pub-sub.post_ciem_basic_delay]
+  flags      = { "CIEM_FEATURE_MODE" : "advanced" }
 
   lifecycle {
     ignore_changes = [flags, components]
@@ -134,12 +147,14 @@ resource "sysdig_secure_cloud_auth_account_feature" "identity_entitlement_advanc
 
 # === END CIEM Advanced ===
 
-# === VM (Vulnerability Management — Agentless Scanning) ===
-# Scans compute instances and container images for vulnerabilities.
+# === VM (Host Scanning — Agentless) ===
+# Agentless vulnerability scanning of compute instances. Creates a service
+# account + permissions for temporary snapshot access.
 
 module "agentless-scan" {
   source                   = "sysdiglabs/secure/google//modules/agentless-scan"
-  project_id               = "{{GCP_PROJECT_ID}}"
+  version                  = "~> 2.0"
+  project_id               = module.onboarding.project_id
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 }
 
@@ -149,6 +164,63 @@ resource "sysdig_secure_cloud_auth_account_feature" "agentless_scanning" {
   enabled    = true
   components = [module.agentless-scan.agentless_scan_component_id]
   depends_on = [module.agentless-scan]
+
+  # "Select Scanning Types" sub-options — feature flags (set at onboarding,
+  # toggleable later in the Sysdig UI):
+  #   SCANNING_HOST_CONTAINER_ENABLED — also scan running containers on the host
+  #   SCANNING_MALWARE_ENABLED        — malware detection (Preview)
+  flags = {{AGENTLESS_SCANNING_FLAGS}}
+  # Example: { "SCANNING_HOST_CONTAINER_ENABLED" : "true", "SCANNING_MALWARE_ENABLED" : "true" }
+
+  lifecycle {
+    ignore_changes = [flags]
+  }
 }
 
 # === END VM ===
+
+# === WORKLOAD_SCANNING (Workload Scanning) ===
+# Scans running containers and Artifact Registry images. One shared module; each
+# selected "Workload Type" adds its own feature resource. Keep at least one of
+# the three sub-blocks below; remove the workload types the user did not select.
+
+module "vm_workload_scanning" {
+  source                   = "sysdiglabs/secure/google//modules/vm-workload-scanning"
+  version                  = "~> 2.0"
+  project_id               = module.onboarding.project_id
+  is_organizational        = module.onboarding.is_organizational
+  organization_domain      = module.onboarding.organization_domain
+  sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
+}
+
+#   === WORKLOAD_CLOUDRUN (UI: Cloud Run) ===
+resource "sysdig_secure_cloud_auth_account_feature" "config_cloud_run" {
+  account_id = module.onboarding.sysdig_secure_account_id
+  type       = "FEATURE_SECURE_WORKLOAD_SCANNING_CONTAINERS"
+  enabled    = true
+  components = [module.vm_workload_scanning.vm_workload_scanning_component_id]
+  depends_on = [module.vm_workload_scanning]
+}
+#   === END WORKLOAD_CLOUDRUN ===
+
+#   === WORKLOAD_GKE (UI: GKE) ===
+resource "sysdig_secure_cloud_auth_account_feature" "config_gke" {
+  account_id = module.onboarding.sysdig_secure_account_id
+  type       = "FEATURE_SECURE_WORKLOAD_SCANNING_KUBERNETES"
+  enabled    = true
+  components = [module.vm_workload_scanning.vm_workload_scanning_component_id]
+  depends_on = [module.vm_workload_scanning]
+}
+#   === END WORKLOAD_GKE ===
+
+#   === WORKLOAD_FUNCTIONS (UI: Cloud Functions) ===
+resource "sysdig_secure_cloud_auth_account_feature" "config_functions" {
+  account_id = module.onboarding.sysdig_secure_account_id
+  type       = "FEATURE_SECURE_WORKLOAD_SCANNING_FUNCTIONS"
+  enabled    = true
+  components = [module.vm_workload_scanning.vm_workload_scanning_component_id]
+  depends_on = [module.vm_workload_scanning]
+}
+#   === END WORKLOAD_FUNCTIONS ===
+
+# === END WORKLOAD_SCANNING ===

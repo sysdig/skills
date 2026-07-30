@@ -1,7 +1,14 @@
 # Offboarding Guide
 
-Disconnect a cloud account from Sysdig by destroying the Terraform-managed
-resources. This is a first-class flow, not an afterthought.
+Disconnecting is a first-class flow, not an afterthought. Two paths, by target:
+
+- **Cloud accounts** — destroy the Terraform-managed resources (this page,
+  from [Pre-Destroy Checklist](#pre-destroy-checklist) down).
+- **Linux hosts** — remove the agent and, critically, the credential it left on
+  disk: [Linux host offboarding](#linux-host-offboarding).
+
+For Kubernetes, `helm uninstall <release> -n <namespace>` removes the Shield
+components; the Agent Access Key lives only in the release values.
 
 ## Pre-Destroy Checklist
 
@@ -76,6 +83,97 @@ After successful offboarding:
 1. Update `customer-log.md` with offboarding details
 2. Remove the account entry from `environment.yaml`
 3. Optionally archive the Terraform directory
+
+## Linux host offboarding
+
+Removing the agent from a standalone Linux host. **Read the credential warning
+first — package removal alone leaves a working Agent Access Key on disk.**
+
+🔴 **`apt-get purge` / `yum remove` does NOT delete
+`/opt/draios/etc/dragent.yaml`.** The config is placed on the host after
+installation, so it is not a package-managed conffile: the purge leaves it
+behind **with the Agent Access Key in plain text**, along with
+`dragent.yaml.bak` / `dragent.auto.yaml`, the malware signature DB under
+`/opt/draios/run/db/`, and the logs. An offboarding that stops at package
+removal reports success while the host still holds a live tenant credential.
+`rm -rf /opt/draios` is a required step, not a tidy-up.
+
+### 1. Stop the agent
+
+```bash
+# Package install
+systemctl disable --now dragent
+
+# Docker install
+docker rm -f sysdig-agent
+docker rmi quay.io/sysdig/agent-slim      # optional: reclaim the image
+```
+
+### 2. Remove the software
+
+```bash
+# DEB
+apt-get purge -y draios-agent draios-agent-slim draios-agent-kmodule
+
+# RPM
+yum remove -y draios-agent draios-agent-slim draios-agent-kmodule
+```
+
+**Build-chain cleanup (DEB).** The `kmod` driver pulls in a build chain (`dkms`,
+kernel headers, compilers). To remove it:
+
+- **Do not** run `apt-get autoremove --purge` with
+  `-o APT::AutoRemove::RecommendsImportant=false -o
+  APT::AutoRemove::SuggestsImportant=false`. Those options make apt collect
+  packages that were already on the host and are only held by Recommends — on a
+  plain Ubuntu 22.04 server it proposed **164** packages when the install had
+  added **62**.
+- Plain `apt-get autoremove` under-removes (typically only `dkms` and
+  `dctrl-tools`).
+- The safe method: take the newly-installed package list from the install
+  transaction output (`/var/log/apt/history.log` if it was not recorded), purge
+  exactly that list, and **dry-run first** —
+  `apt-get -s purge <list>` — then diff what apt says it would remove against
+  what was asked. Proceed only when there are no extras.
+
+### 3. Remove the leftovers (credential, state, logs)
+
+```bash
+rm -rf /opt/draios      # config incl. the Agent Access Key, .bak files, sigdb, logs
+rm -rf /opt/sysdig      # host-side config dir used by the Docker install method
+```
+
+### 4. Remove the repository and signing key
+
+```bash
+# DEB
+rm -f /etc/apt/sources.list.d/sysdig.list /usr/share/keyrings/sysdig-keyring.asc
+apt-get update
+
+# RPM
+rm -f /etc/yum.repos.d/draios.repo
+rpm -e gpg-pubkey-$(rpm -qa gpg-pubkey --qf '%{version}-%{release} %{summary}\n' \
+  | grep -i draios | cut -d' ' -f1) 2>/dev/null || true
+```
+
+### 5. Verify nothing is left
+
+```bash
+systemctl status dragent          # expect: Unit dragent.service could not be found
+find /etc /opt /usr/share/keyrings /var/lib/systemd /usr/lib/systemd \
+  -iname '*sysdig*' -o -iname '*draios*' 2>/dev/null
+```
+
+**Expected:** the `find` returns nothing. Any hit still on the host must be
+reviewed before calling the offboarding complete — treat a surviving
+`dragent.yaml` (any name, any directory) as an exposed credential: delete it and
+tell the user to rotate the Agent Access Key in Sysdig UI → Settings → Agent
+Keys if the host was shared or is being decommissioned to someone else.
+
+The host stops reporting immediately; it disappears from Sysdig Secure →
+**Integrations → Data Sources** after the backend's inactivity window.
+
+---
 
 ## S3 Bucket Cleanup (AWS)
 

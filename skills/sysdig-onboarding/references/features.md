@@ -1,25 +1,36 @@
 # Sysdig Secure Feature Matrix
 
-## Security Capabilities (User-Facing)
+## Capability → Marker Mapping (generator-facing)
 
-The onboarding skill presents features as progressive **capabilities** so
-users don't need to know security acronyms. The first connection is always
-included; Cloud Logs and Agentless Scanning are optional add-ons.
+The user-facing capability wording, picker JSON, and ask-time dependency
+handling live in [interview-questions.md](interview-questions.md#step-3d-security-capabilities)
+— do not restate them here. This file owns the **capability → technical
+feature → template marker** mapping the generator uses to decide which
+`# === MARKER ===` sections to keep or remove.
 
-| Capability | What it does (plain language) | Technical features | Template markers |
-|------------|-----------------------------|--------------------|-----------------|
-| **First connection** (always) | Creates a read-only trust relationship with your cloud account. Enables asset inventory, security posture checks, and foundational identity analysis. | CSPM, CIEM Basic | `CSPM`, `CIEM Basic` |
-| **Cloud Logs** (optional) | Captures cloud audit logs so Sysdig can detect threats in real time. Also upgrades identity analysis with actual usage data. | CDR, CIEM Advanced | `CDR` or `CDR_CLOUDLOGS`, `CIEM Advanced` or `CIEM_ADVANCED_CLOUDLOGS` |
-| **Agentless Scanning** (optional) | Scans your hosts and workloads for known vulnerabilities — no agents required. | VM Agentless, VM Workload (ECS/Lambda, AWS only) | `VM`, `WORKLOAD_SCANNING` |
+| Capability | Technical features | Template markers |
+|------------|--------------------|-----------------|
+| **First connection** (always) | CSPM, CIEM Basic | `CSPM`, `CIEM Basic` |
+| **Threat Detection** (optional) | CDR | `CDR` or `CDR_CLOUDLOGS` |
+| **Advanced Identity Analysis** (optional) | CIEM Advanced | `CIEM Advanced` or `CIEM_ADVANCED_CLOUDLOGS` — **also keep** the matching `CDR`/`CDR_CLOUDLOGS` block, which supplies the log data |
+| **Host Scanning (Agentless)** (optional) | VM Agentless (+ flags) | `VM` |
+| **Workload Scanning** (optional; templates generate AWS + GCP + Azure) | VM Workload | `WORKLOAD_SCANNING`, plus the serverless sub-markers `WORKLOAD_ECS` / `WORKLOAD_LAMBDA` (AWS) — see [Serverless workload scanning](#serverless-workload-scanning-aws-terraform) |
 
-**Recommended:** Enable all capabilities for comprehensive coverage. Start
-with the first connection alone if you want the lightest footprint first,
-then add Cloud Logs and Agentless Scanning later.
+> **Generation consequence of the dependency rules** (the ask-time behavior is
+> in interview-questions.md): when **Advanced Identity Analysis** is selected,
+> keep the `CDR`/`CDR_CLOUDLOGS` block even if Threat Detection was not
+> separately chosen — the `CIEM_ADVANCED*` block references the
+> `event-bridge` / `cloud-logs` module and won't validate without it.
 
-> **Capability-to-marker mapping:** When generating Terraform, the agent uses
-> the "Template markers" column to decide which `# === MARKER ===` sections
-> to keep or remove from the template files. See the detailed feature docs
-> below for module references and dependencies.
+> **Mutually-exclusive markers — keep exactly one of each pair:**
+> `CDR` vs `CDR_CLOUDLOGS`, and `CIEM Advanced` vs `CIEM_ADVANCED_CLOUDLOGS`.
+> Each pair defines the **same** Terraform resource addresses, so keeping both
+> fails with a duplicate-resource error; keep the variant matching the chosen
+> log capture method (EventBridge → `CDR`/`CIEM Advanced`; CloudTrail/S3 →
+> `CDR_CLOUDLOGS`/`CIEM_ADVANCED_CLOUDLOGS`). The `CIEM_ADVANCED*` blocks
+> reference `module.event-bridge` / `module.cloud-logs`, so when Advanced
+> Identity Analysis is selected you must keep the matching CDR block too —
+> otherwise the generated file has a dangling module reference and won't validate.
 
 ---
 
@@ -78,8 +89,8 @@ cloud audit trails.
 **Terraform module (per provider):**
 - AWS (EventBridge): `sysdiglabs/secure/aws//modules/integrations/event-bridge`
 - AWS (CloudTrail/S3): `sysdiglabs/secure/aws//modules/integrations/cloud-logs`
-- GCP: `sysdiglabs/secure/google//modules/pub-sub`
-- Azure: `sysdiglabs/secure/azurerm//modules/event-hub`
+- GCP: `sysdiglabs/secure/google//modules/integrations/pub-sub`
+- Azure: `sysdiglabs/secure/azurerm//modules/integrations/event-hub`
 
 **Feature type:** `FEATURE_SECURE_THREAT_DETECTION`
 
@@ -133,11 +144,12 @@ delegation for deeper Workspace identity analysis.
 
 ---
 
-### Vulnerability Management — Agentless Scanning
+### Vulnerability Management — Agentless Host Scanning
 
-**What it does:** Scans cloud workloads (EC2 instances, container images,
-Lambda functions, etc.) for known vulnerabilities without deploying agents.
-Creates temporary snapshots for analysis.
+**What it does:** Scans cloud **hosts** (EC2 instances and other VMs) for known
+vulnerabilities without deploying agents. Creates temporary disk snapshots for
+analysis. This is host scanning only — container and serverless workloads are
+covered by **Workload Scanning** below, which is a separate module and decision.
 
 **Terraform module (per provider):**
 - AWS: `sysdiglabs/secure/aws//modules/agentless-scanning`
@@ -153,33 +165,97 @@ Creates temporary snapshots for analysis.
 - GCP: Service account + permissions for snapshot access
 - Azure: Role assignment for disk snapshot access
 
+**Sub-options (AWS — feature flags):** Two extras are set as `flags` on the
+`FEATURE_SECURE_AGENTLESS_SCANNING` resource, not as module variables (confirmed
+against a UI Terraform export):
+
+| Flag | Capability | Notes |
+|------|-----------|-------|
+| `SCANNING_HOST_CONTAINER_ENABLED` | Container scanning — also scan running containers found on the host | General availability |
+| `SCANNING_MALWARE_ENABLED` | Malware scanning | **Preview** |
+
+Set the selected flags to `"true"` in the `flags` map and add
+`lifecycle { ignore_changes = [flags] }` so later UI toggles aren't reverted by
+Terraform. Resolve the `{{AGENTLESS_SCANNING_FLAGS}}` placeholder to a map
+literal, e.g. `{ "SCANNING_HOST_CONTAINER_ENABLED" : "true" }`, or `{}` when the
+user wants host-disk scanning only.
+
 **Note:** Requires selecting target regions. Operates asynchronously — initial
 scan results may take up to 24 hours.
 
 ---
 
-### Vulnerability Management — Workload Scanning (ECS + Lambda)
+### Vulnerability Management — Workload Scanning (containers + serverless)
 
-**What it does:** Scans container images running in ECS tasks and Lambda
-functions for known vulnerabilities. Unlike agentless scanning (which
-uses EBS snapshots for EC2), this module integrates directly with the
-container and serverless runtimes.
+**What it does:** Scans container and serverless workloads for known
+vulnerabilities. Unlike host scanning (which uses disk snapshots for VMs), this
+integrates directly with the container and serverless runtimes.
 
-**Terraform module:**
+**Platforms covered, per provider:**
+- **AWS:** ECS Fargate and AWS Lambda (zip and container packaging).
+- **Azure:** Azure Functions, AKS, and Azure Container Apps.
+- **GCP:** GKE, Cloud Run, and GCP Functions.
+
+For Kubernetes workloads on EKS, the Sysdig agent is the recommended path — it
+adds runtime visibility and in-cluster image scanning that complement the
+agentless coverage above.
+
+> **How to enable:** These onboarding templates generate AWS (ECS Fargate +
+> Lambda), GCP (Cloud Run + GKE + Cloud Functions), and Azure (Container
+> Instances/Apps + Functions + AKS) workload scanning directly via Terraform.
+
+**Terraform module (generated by these templates):**
 - AWS: `sysdiglabs/secure/aws//modules/vm-workload-scanning`
+- GCP: `sysdiglabs/secure/google//modules/vm-workload-scanning`
+- Azure: `sysdiglabs/secure/azurerm//modules/vm-workload-scanning`
 
 **Feature types:**
-- `FEATURE_SECURE_WORKLOAD_SCANNING_CONTAINERS` — ECS
-- `FEATURE_SECURE_WORKLOAD_SCANNING_FUNCTIONS` — Lambda
+- `FEATURE_SECURE_WORKLOAD_SCANNING_CONTAINERS` — containers (AWS ECS Fargate; GCP Cloud Run; Azure Container Instances/Apps)
+- `FEATURE_SECURE_WORKLOAD_SCANNING_KUBERNETES` — Kubernetes (GCP GKE; Azure AKS)
+- `FEATURE_SECURE_WORKLOAD_SCANNING_FUNCTIONS` — serverless (AWS Lambda; GCP Cloud Functions; Azure Functions)
 
-**Key variables:**
-- `lambda_scanning_enabled` (bool, default: false) — Enable Lambda scanning
+<a id="serverless-workload-scanning-aws-terraform"></a>
+
+**Serverless scanning is agentless.** No sidecar, Dockerfile change, ECS
+task-definition mutation, or CloudFormation macro is involved — scanning is
+performed by Sysdig against the images the workloads reference. Enablement is
+the module input plus the per-target feature resources inside the
+`WORKLOAD_SCANNING` block:
+
+| User selection (Step 3d-iv) | `{{LAMBDA_SCANNING_ENABLED}}` | Markers to keep |
+|---|---|---|
+| ECS / Fargate only | `false` | `WORKLOAD_ECS` — remove `WORKLOAD_LAMBDA` |
+| Lambda only | `true` | `WORKLOAD_LAMBDA` — remove `WORKLOAD_ECS` |
+| Both | `true` | keep both |
+| Neither | — | remove the whole `WORKLOAD_SCANNING` block |
+
+> **Why `lambda_scanning_enabled` and the LAMBDA marker must agree.** The
+> module's base IAM role grants ECR read only — that is everything ECS/Fargate
+> scanning needs, since Sysdig scans the ECR images the tasks reference. Lambda
+> is the only target that adds IAM (`lambda:GetFunction`, `ListFunctions`,
+> `GetLayerVersion`, …), and the module attaches that policy **only** when
+> `lambda_scanning_enabled = true`. Keeping
+> `FEATURE_SECURE_WORKLOAD_SCANNING_FUNCTIONS` with the flag left `false` tells
+> Sysdig to scan Lambda against a role that cannot read it, and every scan
+> fails with an access error. There is **no** ECS-specific module variable and
+> **no** ECS-specific IAM.
+
+**Key variables (AWS `vm-workload-scanning` module):**
+- `lambda_scanning_enabled` (bool, default: false) — the only feature toggle the
+  module exposes. Grants the role its `lambda:*` read permissions. ECS/Fargate
+  has no counterpart variable — it rides on the always-created ECR read grant.
 
 **Dependencies:** Requires the onboarding module. Independent of CSPM,
-CDR, and agentless scanning.
+CDR, and host scanning.
 
-**Note:** GCP and Azure equivalents are not yet available in the Terraform
-modules. AWS-only for now.
+**Recommending this capability:**
+- **AWS:** a strong fit for customers running ECS Fargate or Lambda. For
+  EKS / Kubernetes workloads, recommend the Sysdig agent, which delivers
+  runtime and in-cluster vulnerability coverage.
+- **GCP:** generated directly by these templates (Cloud Run / GKE / Cloud
+  Functions); select at least one workload type.
+- **Azure:** generated directly by these templates (Container Instances/Apps /
+  Azure Functions / AKS); select at least one workload type.
 
 ---
 
@@ -202,8 +278,20 @@ resource exists for DSPM as of provider v3.4.3.
 
 ## Dependency Chain
 
+> **Scope:** This chain describes the **Terraform modules** and the
+> `sysdig_secure_cloud_auth_account_feature` **API resources** they create —
+> i.e. how onboarding automation wires things together. It is **not** the
+> product-level relationship a customer sees in the UI. In this Terraform/API
+> view, every feature resource binds to the onboarding module's account
+> (`module.onboarding.sysdig_secure_account_id`), so the onboarding module is
+> always required here. Only CIEM (Basic and Advanced) additionally depends on
+> the Config Posture module/components; CDR, agentless host scanning, and
+> workload scanning do not. At the product level the onboarding/trust step and
+> the security features are conceptually independent — don't read this diagram
+> as customer-facing feature dependencies.
+
 ```
-Onboarding Module (always required)
+Onboarding Module (always required — Terraform/API binding, not a product dependency)
 │
 ├─→ Config Posture Module
 │   ├─→ CSPM feature (FEATURE_SECURE_CONFIG_POSTURE)
@@ -220,6 +308,7 @@ Onboarding Module (always required)
 │
 ├─→ Workload Scanning Module
 │   ├─→ VM Containers feature (FEATURE_SECURE_WORKLOAD_SCANNING_CONTAINERS)
+│   ├─→ VM Kubernetes feature (FEATURE_SECURE_WORKLOAD_SCANNING_KUBERNETES — GCP/Azure)
 │   └─→ VM Functions feature (FEATURE_SECURE_WORKLOAD_SCANNING_FUNCTIONS)
 │
 └─→ DSPM (manual — requires Sysdig support)
@@ -231,16 +320,21 @@ of configuration errors.
 
 ---
 
-## Recommended Starting Configuration
+## Recommended Enablement Order
 
-For most users, we recommend enabling all three blocks:
+For most users, the field-recommended order to enable capabilities is:
 
-1. **Block 1 — Establish Trust** (always included) — Read-only, immediate value
-2. **Block 2 — Cloud Logs** — Enables real-time threat detection (CDR) + advanced identity analysis
-3. **Block 3 — Agentless Scanning** — If running workloads in the cloud
+1. **CSPM + Basic CIEM** (Trust / Foundational) — always included; read-only,
+   immediate value
+2. **Host Scanning (Agentless)** — vulnerability scanning for cloud hosts
+3. **Workload Scanning** — if applicable (see provider support below)
+4. **Threat Detection / Advanced Identity Analysis (Cloud Logs)** — real-time
+   threat detection plus usage-based identity analysis
 
-This order minimizes permissions at each step. Users can start with Block 1
-alone and add Blocks 2–3 later in a follow-up session.
+The skill does not enforce a strict enablement order — users can enable
+capabilities in any sequence and add more later in a follow-up session. This
+order reflects the recommended progression and should drive the guidance the
+skill gives when advising customers.
 
 ---
 
@@ -252,7 +346,17 @@ alone and add Blocks 2–3 later in a follow-up session.
 | CDR | Yes | Yes | Yes | No |
 | CIEM Basic | Yes | Yes | Yes | No |
 | CIEM Advanced | Yes | Yes | Yes | No |
-| Agentless VM | Yes | Yes | Yes | No |
-| Workload Scanning (ECS) | Yes | No | No | No |
-| Workload Scanning (Lambda) | Yes | No | No | No |
+| Agentless Host Scanning | Yes | Yes | Yes | No |
+| Workload Scanning | Yes¹ | Yes² | Yes² | No |
 | DSPM | Manual | Manual | Manual | No |
+
+**Workload Scanning support notes:**
+
+- ¹ **AWS:** ECS Fargate and Lambda, configured directly by these onboarding
+  Terraform templates (`vm-workload-scanning` module). EKS / Kubernetes
+  workloads are covered through the Sysdig agent (runtime + in-cluster image
+  scanning).
+- ² **GCP** (Cloud Run, GKE, Cloud Functions) and **Azure** (Azure Container
+  Instances/Apps, Azure Functions, AKS) workload scanning are generated directly
+  by these templates. Single-subscription Azure covers all three workload types;
+  Advanced Identity (usage-based CIEM) remains tenant-scope only.

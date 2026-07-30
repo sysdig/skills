@@ -12,7 +12,7 @@ dependencies:
         Authorization: "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
     - type: "mcp"
       value: "jira-mcp-server"
-      description: "Jira/Atlassian MCP server — used here only for ticket UPDATES when a ticket key is passed in via the `ticket` argument. Ticket creation lives in /sysdig-investigate."
+      description: "Jira/Atlassian MCP server — ticket search, creation, and updates. /sysdig-remediate is the sole ticket creator in the Sysdig vulnerability workflow (step 5b)."
       transport: "stdio"
       command: "npx"
       args: ["-y", "--package=mcp-atlassian", "--package=jsdom", "mcp-atlassian"]

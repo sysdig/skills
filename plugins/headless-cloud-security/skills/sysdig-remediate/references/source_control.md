@@ -1,49 +1,47 @@
 # Source Control
 
-The remediate skill is **mandatory-bound to source code**: the only deliverable is a patch (PR/MR or local diff) that fixes a vulnerability in the code that builds the image. Without read+write access to that code the skill has nothing to produce — stop the run with a clear message rather than fall back to a tracking-only workflow.
+Source access powers the **PR half** of the remediate skill's deliverables. It is one of two deliverable paths — the other is the tracking ticket (see `references/ticketing.md`). No source access means the PR deliverable is unavailable and step 1b constrains the choice to a ticket; the skill stops only when ticketing is unavailable too (see `SKILL.md` step 0b).
 
 ## Supported systems
 
 The skill connects to a source control system through a CLI or any compatible MCP server (hosted or local) — the host agent decides which to use. Names below are common implementations, not requirements: any MCP that exposes equivalent capabilities (search, read, list commits, create branch, open PR) works.
 
-One of the following must be available:
+One of the following enables the PR deliverable:
 
 - **GitHub** — `gh` CLI or a GitHub MCP server
 - **GitLab** — `glab` CLI or a GitLab MCP server
 - **Local folder** — direct access to a checked-out working tree the user points the skill at (typically a git repo, but a plain source tree is acceptable for read-only inspection)
 
-If none of these is reachable, stop the skill and tell the user that source access is mandatory. There is no useful tracking-only mode for this skill — opening a Jira/Linear/GH-Projects ticket without a patch is what `sysdig-investigate` already does.
+If none of these is reachable, record `source.kind = none` and continue — the PR deliverable is off the table, and step 1b offers the ticket-only path. Do not stop the skill for missing source access alone.
 
 ## Selection algorithm
 
-Run this in step 0a of `SKILL.md`, before touching any other tool. Stop on the first match — do not silently combine sources for one image.
+Run this in step 0b of `SKILL.md`, before touching any other tool. Stop on the first match — do not silently combine sources for one image.
 
 1. **Check the cached mapping.** Read `image_repo_mappings` from the skill state. If an entry for the target image is less than 30 days old, infer the source kind from its `repository` field (e.g. `org/repo` → github; full HTTPS URL on a non-github host → gitlab; absolute filesystem path → local) and skip ahead to the **verify auth** step for just that kind.
 
 2. **Probe each provider in this order: GitHub → GitLab.**
-   - GitHub: `gh auth status` exits 0, *or* a GitHub MCP tool is callable. Resolve the user's orgs once via `gh api user/orgs --jq '.[].login'` and cache the list — step 4 needs it for org-scoped search.
+   - GitHub: `gh auth status` exits 0, *or* a GitHub MCP tool is callable. Resolve the user's orgs once via `gh api user/orgs --jq '.[].login'` and cache the list — step 3b needs it for org-scoped search.
    - GitLab: `glab auth status` exits 0, *or* a GitLab MCP tool is callable. Read `GITLAB_HOST` so self-hosted instances work — never hardcode `gitlab.com`.
 
 3. **Probe the local fallback.** If the user passed a folder argument (e.g. `--source <path>`) or there is a `.git` directory under the cwd that the user confirms corresponds to the image, use `local`.
 
 4. **None found.** Ask the user (via `AskUserQuestion` if available):
 
-   > Remediation needs the source that builds this image. I couldn't find a configured source. Pick one:
+   > No configured source was found. A pull request needs the source that builds this image. Pick one:
    > 1. Configure `gh` or `glab` and retry
    > 2. Provide a local folder path
-   > 3. Cancel
+   > 3. Continue without source — ticket-only deliverable
 
-   On option 3 (or if the chosen option still doesn't work), stop with:
+   On option 3 (or if the chosen option still doesn't work), record `source.kind = none` and continue: step 1b will constrain the deliverable to a ticket. Only when ticketing is also unavailable does the skill stop (per `SKILL.md` step 0b).
 
-   > I cannot remediate `<image>` without access to its source. The skill produces a code patch — there is no useful tracking-only mode. Configure a forge or point me at a local working tree, then re-run.
-
-5. **Record the choice** in working memory as `source.kind` ∈ {`github`, `gitlab`, `local`} and `source.handle` (the org/user, the GitLab group, or the absolute path). Later steps key off these.
+5. **Record the choice** in working memory as `source.kind` ∈ {`github`, `gitlab`, `local`, `none`} and `source.handle` (the org/user, the GitLab group, or the absolute path; unset for `none`). Later steps key off these.
 
 If multiple providers are available, prefer the one that already owns the cached mapping for this image; otherwise prefer the order above. Don't re-ask the user once a choice has been made for the current image.
 
 ## Verifying auth before real work
 
-Before step 4 starts traversing the repo, do one cheap read to fail fast. A successful probe means more than "credentials exist" — it confirms the API/host pair actually answers.
+Before step 3b starts traversing the repo, do one cheap read to fail fast. A successful probe means more than "credentials exist" — it confirms the API/host pair actually answers.
 
 | Source | Probe | Pass criterion |
 |---|---|---|
@@ -55,24 +53,24 @@ If the probe fails, surface the error verbatim and ask the user to fix auth or s
 
 ## Capabilities the skill needs
 
-Whatever the chosen source, the skill must be able to do all of these. If any one is impossible (e.g. read-only token, no PR scope), warn the user up-front and offer to switch to `local` mode rather than discovering it mid-flow.
+Whatever the chosen source, the PR path must be able to do all of these. If any one is impossible (e.g. read-only token, no PR scope), warn the user up-front and offer to switch to `local` mode — or downgrade the deliverable to ticket-only (step 1b) — rather than discovering it mid-flow.
 
 | Capability | Used by | GitHub | GitLab | Local |
 |---|---|---|---|---|
-| Search code by content/filename | step 4 — find repo | `gh search code` / MCP `search_code` | `glab api` search (group-scoped) | `grep -r` on tree |
-| Read file at default branch | step 4d — decide fix | `gh api repos/.../contents/...` / MCP `get_file_contents` | `glab api` files | direct file read |
-| List commits filtered by path | step 4b — reviewers | `gh api repos/.../commits?path=` | `glab api` commits | `git log -- <path>` |
-| Create branch | step 5a | `gh api ... refs` / MCP `create_branch` | `glab api branches` | `git checkout -b` |
+| Search code by content/filename | step 3b — find repo | `gh search code` / MCP `search_code` | `glab api` search (group-scoped) | `grep -r` on tree |
+| Read file at default branch | step 3d — decide fix | `gh api repos/.../contents/...` / MCP `get_file_contents` | `glab api` files | direct file read |
+| List commits filtered by path | step 3c — reviewers | `gh api repos/.../commits?path=` | `glab api` commits | `git log -- <path>` |
+| Create branch | step 5a | `gh api ... refs` / MCP `create_branch` | `glab api` branches | `git checkout -b` |
 | Commit a file change | step 5a | `gh api ... contents` / MCP `push_files` | `glab api` commit | `git commit` |
 | Open a PR / MR | step 5a | `gh pr create` | `glab mr create` | n/a — emit `.patch` |
-| Search existing PRs / MRs | step 4a | `gh pr list --search` | `glab mr list` | n/a |
+| Search existing PRs / MRs | step 2b | `gh pr list --search` | `glab mr list` | n/a |
 
 ## Per-system notes
 
 ### GitHub
 
 - **Auth.** Prefer `gh auth status`; if it fails, `GITHUB_TOKEN` must be set with `repo`, `read:org`, and `read:user` scopes. The skill never asks the user to paste a token in chat — auto-discover from env vars only.
-- **Org scoping.** Always restrict code search to orgs the user belongs to: `gh api user/orgs --jq '.[].login'`. Never push to a repo outside that set without explicit user confirmation (this rule lives in `SKILL.md` step 4 — restating here so the reference is self-contained).
+- **Org scoping.** Always restrict code search to orgs the user belongs to: `gh api user/orgs --jq '.[].login'`. Never push to a repo outside that set without explicit user confirmation (this rule lives in `SKILL.md` step 3b — restating here so the reference is self-contained).
 - **Default branch.** `gh api repos/<owner>/<repo> --jq .default_branch`. Branch off this — never assume `main`/`master`. Many Sysdig customers still ship from `master` or have customised default-branch names.
 - **Search examples.**
   - Repo by name: `gh search repos "<image-name> org:<org>"`
@@ -92,8 +90,8 @@ Whatever the chosen source, the skill must be able to do all of these. If any on
 This mode exists for users who can't or won't grant the agent forge access (regulated environments, air-gapped networks, or simply preference). It is a first-class mode, not a degraded one.
 
 - The user provides an absolute path. Verify it exists, is a git working tree (`.git/` present), and is clean (`git status --porcelain` empty). A dirty tree confuses the diff — refuse and ask the user to commit/stash first.
-- The "find the repo" logic in step 4 collapses to: *the repo is this folder*. Skip code search.
-- For commit history (step 4b), use `git log --follow --pretty=format:'%H %ae %an' -n 5 -- <affected_file>`. Author email is on the same line so the bot-filter from `SKILL.md` step 4b applies unchanged (skip logins/emails containing `bot`, `renovate`, `dependabot`, `github-actions`, `[bot]`).
+- The "find the repo" logic in step 3b collapses to: *the repo is this folder*. Skip code search.
+- For commit history (step 3c), use `git log --follow --pretty=format:'%H %ae %an' -n 5 -- <affected_file>`. Author email is on the same line so the bot-filter from `SKILL.md` step 3c applies unchanged (skip logins/emails containing `bot`, `renovate`, `dependabot`, `github-actions`, `[bot]`).
 - Instead of opening a PR (step 5a), write two artifacts to the folder root and tell the user the paths:
   1. `sysdig-fix-<cve-id>.patch` — `git diff` of the proposed change against current HEAD. Apply with `git apply <patch>`.
   2. `sysdig-fix-<cve-id>.md` — the body content the PR would have had (summary, version-resolution chain, references). Lift the markdown straight from `SKILL.md` step 5a; the user can paste it into whatever PR template their workflow expects.
@@ -103,16 +101,16 @@ This mode exists for users who can't or won't grant the agent forge access (regu
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Probe succeeds but code search returns no candidates | Image built from a repo outside the user's org/group, or under a different name | Ask the user for the repo name; on a second miss, offer local-folder mode. |
-| Probe succeeds but PR creation 403s | Token lacks write scope, branch protection blocks direct push | Switch to local-folder mode rather than fighting the token; emit a patch artifact and tell the user why you switched. |
+| Probe succeeds but code search returns no candidates | Image built from a repo outside the user's org/group, or under a different name | Ask the user for the repo name; on a second miss, offer local-folder mode (Case D in `references/fix-cases.md` covers the ticket fallback). |
+| Probe succeeds but PR creation 403s | Token lacks write scope, branch protection blocks direct push | Switch to local-folder mode rather than fighting the token — or downgrade the deliverable to ticket-only (step 1b). Tell the user why you switched. |
 | Local folder is dirty | Uncommitted work in the working tree | Refuse to write a patch. Ask the user to commit/stash and retry — never silently include unrelated changes in the diff. |
 | Cached mapping points at a repo the user no longer has access to | Org membership changed, repo archived/renamed | Drop the cached entry, re-run the selection algorithm, surface this to the user so they aren't surprised by a re-search. |
 | Two providers both authenticated, neither has the cached mapping | Genuinely ambiguous | Use the probe order (GitHub before GitLab). If the search misses on the first, fall back to the second and tell the user which one you used. |
 
 ## What this file deliberately does NOT cover
 
-- *Which* file to patch and *which* version to bump — see `SKILL.md` step 4c/4d (fix-chain analysis).
-- PR / ticket body templating — see `SKILL.md` step 5a/5b.
-- Reviewer/assignee selection logic — see `SKILL.md` step 4b.
+- *Which* file to patch and *which* version to bump — see `SKILL.md` step 3d (fix-chain analysis).
+- PR / ticket body templating — see `SKILL.md` step 5a / `references/ticketing.md`.
+- Reviewer selection logic — see `SKILL.md` step 3c. Ticket assignees — see `references/ticketing.md`.
 
 This reference is the connection layer only: detecting a source, authenticating, and translating capability calls per provider.

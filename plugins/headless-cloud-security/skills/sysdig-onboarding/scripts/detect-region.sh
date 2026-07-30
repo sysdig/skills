@@ -7,7 +7,13 @@
 # Environment (set before calling, e.g. via `source .sysdig-token`):
 #   SYSDIG_SECURE_API_TOKEN — API token (REQUIRED)
 #
-# If env var is not set, falls back to .sysdig-token then .secrets/env from cwd.
+# If the env var is not set, falls back to .sysdig-token then .secrets/env
+# from cwd. Fallback files are PARSED for the known variables, never
+# sourced/executed.
+#
+# All regions are probed in parallel (single ~5s wall-clock wave instead of
+# a sequential sweep); when several respond, the first entry in the priority
+# list wins.
 #
 # Output on success:
 #   Region detected: <region_id>
@@ -19,7 +25,8 @@
 #   1 — No region matched (invalid token or all endpoints unreachable)
 #   2 — Missing prerequisites (curl not found, token not set)
 #
-# Token NEVER appears in output or logs.
+# Token NEVER appears in output, logs, or process arguments (the
+# Authorization header is fed to curl via a private pipe, not argv).
 
 set -euo pipefail
 
@@ -40,13 +47,17 @@ if ! command -v curl &>/dev/null; then
 fi
 
 # --- Token ---
-# Priority: env var > .sysdig-token > .secrets/env
+# Priority: env var (incl. bridged legacy/MCP aliases) > .sysdig-token > .secrets/env
+# resolve_sysdig_credentials bridges legacy vars (e.g. SYSDIG_MCP_API_TOKEN)
+# into the canonical SYSDIG_SECURE_API_TOKEN this script reads.
+source "$(dirname "${BASH_SOURCE[0]}")/resolve-credentials.sh"
+resolve_sysdig_credentials
+
 if [[ -z "${SYSDIG_SECURE_API_TOKEN:-}" ]]; then
-  if [[ -f ".sysdig-token" ]]; then
-    source ".sysdig-token"
-  elif [[ -f ".secrets/env" ]]; then
-    source ".secrets/env"
-  fi
+  load_sysdig_token_file ".sysdig-token" || true
+fi
+if [[ -z "${SYSDIG_SECURE_API_TOKEN:-}" ]]; then
+  load_sysdig_token_file ".secrets/env" || true
 fi
 
 if [[ -z "${SYSDIG_SECURE_API_TOKEN:-}" ]]; then
@@ -56,7 +67,8 @@ if [[ -z "${SYSDIG_SECURE_API_TOKEN:-}" ]]; then
 fi
 
 # --- Region definitions ---
-# Format: region_id|api_url|secure_url
+# Format: region_id|api_url|secure_url — ordered by priority; when more than
+# one endpoint accepts the token, the earliest entry wins.
 REGIONS=(
   "us1|https://secure.sysdig.com/api|https://secure.sysdig.com"
   "us2|https://us2.app.sysdig.com/api|https://us2.app.sysdig.com"
@@ -68,20 +80,36 @@ REGIONS=(
   "in1|https://app.in1.sysdig.com/api|https://app.in1.sysdig.com"
   "jp1|https://app.jp1.sysdig.com/api|https://app.jp1.sysdig.com"
   "me2|https://app.me2.sysdig.com/api|https://app.me2.sysdig.com"
+  # Legacy US1 host: report the canonical region id (us1) with the legacy URLs,
+  # so downstream region/Shield config receives a supported region value.
+  "us1|https://app.sysdigcloud.com/api|https://app.sysdigcloud.com"
 )
 
 echo "Probing Sysdig regions..."
 
-for entry in "${REGIONS[@]}"; do
-  IFS='|' read -r region_id api_url secure_url <<< "$entry"
+PROBE_DIR=$(mktemp -d)
+trap 'rm -rf "$PROBE_DIR"' EXIT
 
-  # Probe via secure_url/api/users/me — consistent across all regions.
-  # api_url has inconsistent path prefixes (/api on some, not others).
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -m 5 \
-    -H "Authorization: Bearer ${SYSDIG_SECURE_API_TOKEN}" \
-    "${secure_url}/api/users/me" 2>/dev/null) || HTTP_CODE="000"
+# Probe via secure_url/api/users/me — consistent across all regions.
+# api_url has inconsistent path prefixes (/api on some, not others).
+# All probes run in parallel; each writes its HTTP code to $PROBE_DIR/<index>.
+for i in "${!REGIONS[@]}"; do
+  IFS='|' read -r _ _ secure_url <<< "${REGIONS[$i]}"
+  (
+    code=$(curl -s -o /dev/null -w "%{http_code}" -m 5 \
+      -K <(printf 'header = "Authorization: Bearer %s"\n' "$SYSDIG_SECURE_API_TOKEN") \
+      "${secure_url}/api/users/me" 2>/dev/null) || code="000"
+    printf '%s' "$code" > "${PROBE_DIR}/${i}"
+  ) &
+done
+wait
 
-  if [[ "$HTTP_CODE" == "200" ]]; then
+for i in "${!REGIONS[@]}"; do
+  IFS='|' read -r region_id api_url secure_url <<< "${REGIONS[$i]}"
+  code="000"
+  [[ -s "${PROBE_DIR}/${i}" ]] && read -r code < "${PROBE_DIR}/${i}" || true
+
+  if [[ "$code" == "200" ]]; then
     pass "Region detected: ${region_id}"
     echo ""
     echo "Region detected: ${region_id}"

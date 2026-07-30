@@ -2,7 +2,9 @@
 name: sysdig-onboarding
 description: >
   Interactive onboarding assistant for Sysdig Secure. Guides users through
-  connecting AWS cloud accounts and Kubernetes clusters to Sysdig.
+  connecting AWS, GCP and Azure cloud accounts, Kubernetes clusters
+  (including Windows nodes), and Linux hosts to Sysdig, plus serverless
+  workload scanning (AWS ECS/Fargate, AWS Lambda, GCP Cloud Run).
   Presents security capabilities in plain language instead of jargon.
   Supports guided (interview) and autonomous (all-at-once) modes. Generates
   Terraform configurations for cloud accounts and Helm values for Kubernetes,
@@ -15,59 +17,92 @@ allowed-tools:
   - Edit
   - AskUserQuestion
   - Agent
+  # Auto-allowed patterns are READ-ONLY/preview by design. Destructive
+  # commands (terraform apply/destroy, terraform state rm, helm
+  # install/upgrade/uninstall, kubectl apply/delete, account switching) are
+  # deliberately absent so the client prompts for human approval — see
+  # references/permission-patterns.md (Tier 2). Do not add them here.
+  - Bash(terraform version*)
   - Bash(terraform init*)
   - Bash(terraform validate*)
   - Bash(terraform plan*)
   - Bash(terraform state list*)
   - Bash(terraform state show*)
   - Bash(terraform output*)
-  - Bash(terraform version*)
-  - Bash(source .sysdig-token *)
-  - Bash(source * && terraform init*)
-  - Bash(source * && terraform validate*)
-  - Bash(source * && terraform plan*)
-  - Bash(source * && terraform state*)
-  - Bash(source * && terraform apply*)
-  - Bash(source * && terraform destroy*)
-  - Bash(source * && terraform output*)
-  - Bash(AWS_PROFILE=* terraform *)
-  - Bash(AWS_PROFILE=* aws *)
+  - Bash(AWS_PROFILE=* terraform init*)
+  - Bash(AWS_PROFILE=* terraform validate*)
+  - Bash(AWS_PROFILE=* terraform plan*)
+  - Bash(AWS_PROFILE=* terraform state list*)
+  - Bash(AWS_PROFILE=* terraform state show*)
+  - Bash(AWS_PROFILE=* terraform output*)
+  - Bash(source .sysdig-token && terraform init*)
+  - Bash(source .sysdig-token && terraform validate*)
+  - Bash(source .sysdig-token && terraform plan*)
+  - Bash(source .sysdig-token && terraform state list*)
+  - Bash(source .sysdig-token && terraform state show*)
+  - Bash(source .sysdig-token && terraform output*)
+  - Bash(source .sysdig-token && AWS_PROFILE=* terraform init*)
+  - Bash(source .sysdig-token && AWS_PROFILE=* terraform validate*)
+  - Bash(source .sysdig-token && AWS_PROFILE=* terraform plan*)
+  - Bash(source .sysdig-token && AWS_PROFILE=* terraform state list*)
+  - Bash(source .sysdig-token && AWS_PROFILE=* terraform state show*)
+  - Bash(source .sysdig-token && AWS_PROFILE=* terraform output*)
   - Bash(aws sts get-caller-identity*)
   - Bash(aws iam simulate-principal-policy*)
-  - Bash(source * && aws sts*)
+  - Bash(aws configure list-profiles*)
+  - Bash(AWS_PROFILE=* aws sts get-caller-identity*)
+  - Bash(AWS_PROFILE=* aws iam simulate-principal-policy*)
+  - Bash(source .sysdig-token && aws sts *)
+  - Bash(gcloud auth list*)
+  - Bash(gcloud config get-value *)
+  - Bash(az account show*)
+  - Bash(az role assignment list*)
+  - Bash(az ad signed-in-user show*)
   - Bash(kubectl get *)
+  - Bash(kubectl describe *)
   - Bash(kubectl logs *)
+  - Bash(kubectl auth can-i *)
   - Bash(kubectl cluster-info*)
   - Bash(kubectl config current-context*)
+  - Bash(kubectl version*)
   - Bash(helm version*)
   - Bash(helm template*)
-  - Bash(helm repo add *)
+  - Bash(helm repo add sysdig https://charts.sysdig.com)
   - Bash(helm repo update*)
   - Bash(helm repo list*)
   - Bash(helm list*)
   - Bash(helm show values*)
-  - Bash(helm uninstall *)
-  - Bash(kubectl version*)
-  - Bash(*validate_prereqs*)
-  - Bash(*check_permissions*)
-  - Bash(*verify*cloud*)
-  - Bash(*detect-region*)
-  - Bash(*detect-env*)
-  - Bash(helm install *)
-  - Bash(helm upgrade *)
-  - Bash(kubectl describe *)
-  - Bash(gcloud *)
-  - Bash(az *)
+  - Bash(*scripts/validate_prereqs.sh *)
+  - Bash(*scripts/check_permissions.sh *)
+  - Bash(*scripts/verify-cloud-status.sh *)
+  # detect-region.sh/detect-env.sh use no trailing space before `*` — unlike
+  # the arg-taking scripts above — because they are invoked with no arguments
+  # (e.g. `source .sysdig-token && scripts/detect-region.sh`); requiring a
+  # space would fail to match the bare invocation. Do not "align" these.
+  - Bash(*scripts/detect-region.sh*)
+  - Bash(*scripts/detect-env.sh*)
+  - Bash(*scripts/render-recap.sh *)
+  - Bash(*scripts/lint_config.sh *)
   - Bash(mkdir -p *)
   - Bash(chmod 600 *)
-  - Bash(sed -i * *.sysdig-token)
-  - Bash(source * && gcloud *)
-  - Bash(source * && az *)
   - Bash(command -v *)
-  - Bash(echo "${SYSDIG_SECURE_API_TOKEN:+SET}")
-  - Bash(aws configure list-profiles*)
   - Bash(ls *)
-  - Bash(source * && AWS_PROFILE=* terraform *)
+  - Bash(echo "${SYSDIG_SECURE_API_TOKEN:+SET}")
+  # Linux host (Step 5) — read-only inspection only. The `draios-agent` package
+  # registers the systemd unit `dragent`; Docker installs use the container
+  # name `sysdig-agent`. Service lifecycle commands (systemctl
+  # enable/start/restart) are Tier 2 — see references/permission-patterns.md.
+  - Bash(systemctl status dragent*)
+  - Bash(systemctl is-active dragent*)
+  - Bash(journalctl -u dragent*)
+  - Bash(docker logs sysdig-agent*)
+  - Bash(docker inspect sysdig-agent*)
+  - Bash(docker exec sysdig-agent grep*)
+  - Bash(docker exec sysdig-agent tail*)
+  - Bash(uname *)
+  - Bash(cat /etc/os-release*)
+  - Bash(dpkg --print-architecture*)
+version: 1.0.1
 ---
 
 ## First-run notice (Public Beta)
@@ -108,7 +143,8 @@ or autonomous mode, then generate tailored installation configurations.
   with text only. After an AskUserQuestion answer, immediately call the
   next one. Text-only responses break the flow in turn-boundary
   environments (e.g., desktop app). Legitimate pause points: (a) Step 2b
-  credential setup, (b) Step 3c preflight, (c) Step 5b final confirmation.
+  credential setup (including the config-only bypass confirmation), (b) Step 3c
+  preflight, (c) Step 5b final confirmation.
 - **Target-dependent flow.** Steps branch after Step 1:
   - Cloud:  0 → 0b → 1 → 2b → 3(a–e) → 5b → 6 → 7 → 8 → 8b → 9
   - K8s:    0 → 0b → 1 → 2b → 4       → 5b →     7 → 8 → 8b → 9
@@ -121,19 +157,35 @@ or autonomous mode, then generate tailored installation configurations.
 - **Adapt to context.** If the user already has partial setup, skip completed
   steps. If they mention specifics early, don't re-ask.
 - **Provider support tiers.**
-  - **Supported:** AWS (cloud), Kubernetes (cluster). Fully tested —
-    provide the full guided experience with troubleshooting.
-  - **Experimental:** GCP (cloud), Azure (cloud). Terraform generation
-    and permission validation work, but the guided flow has not been
-    tested end-to-end. Present the experimental disclaimer (see Step 3a)
+  - **Supported:** AWS (cloud), Kubernetes (cluster), GCP single project (cloud),
+    Azure single subscription (cloud).
+    Fully tested — provide the full guided experience with troubleshooting.
+  - **Experimental:** GCP organization scope, Azure tenant scope, Linux hosts,
+    and Windows nodes (Kubernetes). Configuration generation and permission
+    validation work and the config keys are verified against the Sysdig agent
+    sources, but the guided flow has not been tested end-to-end. Present the
+    experimental disclaimer (see Step 3a / 3b for cloud, Step 5 for hosts)
     and proceed with best-effort guidance.
-  - **Coming soon:** Linux hosts. Do not attempt; tell the user it is
-    planned for a future release.
+  - **Not automated by this skill (but supported by Sysdig).** These products
+    exist and are documented; this skill just does not generate their
+    configuration yet. Do not claim they are unavailable — point the user at
+    the documentation and offer to continue with a target the skill does cover.
+    - **Standalone (non-Kubernetes) Windows hosts** — installed from an MSI
+      package (Windows service `SysdigHostShield`). See
+      https://docs.sysdig.com/en/sysdig-secure/windows-host/. The Windows
+      **Kubernetes DaemonSet** path *is* covered here — see Step 4.
+    - **Serverless runtime detection** (ECS/Fargate, Azure Container Apps) —
+      delivered by the Serverless Workload Agent, which instruments the
+      workload (sidecar or embedded in the image). This is a different
+      capability from the agentless *vulnerability* scanning of ECS/Lambda
+      offered in Step 3d-iv, which this skill does generate. See
+      https://docs.sysdig.com/en/sysdig-secure/serverless-ecs-fargate/ and
+      https://docs.sysdig.com/en/sysdig-secure/azure-container-apps/.
 - **Tested toolchain.** This skill has been tested exclusively with the
   following tools. Results with alternatives have not been validated.
   - **Cloud CLIs:** AWS CLI v2 (`aws`), Google Cloud CLI (`gcloud`),
     Azure CLI (`az`)
-  - **Infrastructure as Code:** Terraform >= 1.5.0
+  - **Infrastructure as Code:** Terraform >= 1.10.0
   - **Kubernetes:** Helm >= 3.10, kubectl
   - **Utilities:** curl, jq
 - **Soft guardrail for alternative tools.** If the user suggests using a
@@ -150,7 +202,9 @@ or autonomous mode, then generate tailored installation configurations.
 - **CRITICAL — Never read, write, or handle tokens directly.**
   NEVER read files with secrets (`.sysdig-token`, `.secrets/env`,
   `terraform.tfvars`). NEVER write real token values — use placeholders.
-  NEVER ask the user to paste tokens in the chat. ALWAYS use
+  NEVER ask the user to paste tokens in the chat. NEVER print token
+  values (`echo $SYSDIG_SECURE_API_TOKEN`, `env`, `printenv`) — the only
+  permitted check is `echo "${SYSDIG_SECURE_API_TOKEN:+SET}"`. ALWAYS use
   `source .sysdig-token && terraform ...` to pass tokens via env vars.
   If a file might contain secrets, do NOT read it.
 - **Human approves destructive operations.** `terraform apply`,
@@ -162,6 +216,11 @@ or autonomous mode, then generate tailored installation configurations.
 - **Use AskUserQuestion for choices.** Whenever presenting a bounded set of
   options (2-4 choices), use the `AskUserQuestion` tool to render structured
   TUI selectors instead of asking in plain text.
+- **Small models for mechanical subagents.** The context-detection (2b-ii),
+  permission-preflight (6a), and verification (Step 8) subagents only run
+  commands and summarize output. When your client's Agent tool supports
+  choosing a model, run them on a small/fast one (e.g. Haiku) — reserve the
+  top-tier model for the conversation itself.
 
 ---
 
@@ -180,10 +239,8 @@ This step only **detects** existing credentials; it does NOT validate or
 block. Credential validation happens in Step 2b after the target is known.
 
 1. **Detect existing environment.** Run `scripts/detect-env.sh --json`
-   to check for known Sysdig env vars (current and legacy). This checks
-   `SYSDIG_SECURE_API_TOKEN` (current standard), `SECURE_API_TOKEN`,
-   `SYSDIG_MCP_API_TOKEN`, `SDC_SECURE_TOKEN`, and others — see the script
-   for the full list.
+   to check for known Sysdig env vars, current and legacy — the script
+   owns the full list.
    - If `has_token` is true: note the detected variable for later use.
    - If `has_url` is true: note the detected URL for later use.
    - If nothing detected: note that credentials will need setup later.
@@ -224,13 +281,6 @@ If the user explicitly requests autonomous mode, jump to
 Each session handles **one target**. For multiple, complete the current one
 and suggest a new session for the next.
 
-**Linux Host gate.** If the user selects "Linux Host", do NOT proceed with
-the interview. Instead tell them:
-
-> Linux host onboarding is planned for a future release but is not
-> available yet. Today I can help you onboard an **AWS cloud account**
-> or a **Kubernetes cluster**. Would you like to pick one of those instead?
-
 ### Step 2b: Credential Setup, Context Detection & Prerequisite Check
 
 After Step 1 identifies the target type, set up the right credentials
@@ -238,95 +288,108 @@ and detect the user's environment. This step is **target-aware**.
 
 #### 2b-i. Credential setup (target-dependent)
 
-**For Cloud Accounts (API Token):**
-The token is stored in `.sysdig-token` — a local file the user edits
-directly. The skill NEVER reads its contents; it only `source`s it.
+Set up the right credential for the target. Read
+[references/credential-setup.md](references/credential-setup.md) for the full
+procedure (cloud `.sysdig-token` creation/bridging, region validation via
+`scripts/detect-region.sh`, and the K8s/Linux Agent Access Key flow). Key
+invariants:
 
-1. If Step 0b detected `has_token`: generate `.sysdig-token` that bridges
-   the detected variable (e.g., `export SYSDIG_SECURE_API_TOKEN="${SDC_SECURE_TOKEN}"`)
-   instead of asking the user to paste a token. Tell the user:
-   "I detected an existing Sysdig token in `$VAR` — using it."
-2. Check `echo "${SYSDIG_SECURE_API_TOKEN:+SET}"`. If set, skip to 5.
-3. If `.sysdig-token` doesn't exist, create it with the Write tool:
-   ```bash
-   # Sysdig Secure API Token — Find at: Sysdig > Settings > API Token
-   # SECURITY: chmod 600, git-ignored. Do not commit or share.
-   SYSDIG_TOKEN="PASTE_YOUR_TOKEN_HERE"
-   export SYSDIG_SECURE_API_TOKEN="$SYSDIG_TOKEN"
-   export TF_VAR_sysdig_secure_api_token="$SYSDIG_TOKEN"
-   export SYSDIG_BASE_URL=""  # filled automatically after region detection
-   ```
-   Then `chmod 600 .sysdig-token` and ensure `.gitignore` includes it.
-4. Ask the user to paste their token in the file (NEVER in the chat).
-   **Returning users:** If `.sysdig-token` already exists, skip to step 5.
-5. **Validate.** Run `source .sysdig-token && scripts/detect-region.sh`.
-   If the token is only in the environment (no `.sysdig-token`), run
-   `scripts/detect-region.sh` directly (reads `SYSDIG_SECURE_API_TOKEN`).
-6. If **valid**: update `SYSDIG_BASE_URL` via sed (does NOT read file):
-   `sed -i '' 's|export SYSDIG_BASE_URL=".*"|export SYSDIG_BASE_URL="<url>"|' .sysdig-token`
-   If missing, append it. Show detected region, continue.
-7. If **invalid**: ask user to verify. Max 2 retries.
-
-**For Kubernetes / Linux Hosts (Agent Access Key):**
-These targets use the **Agent Access Key** (Settings → Agent Keys in
-Sysdig UI), NOT the Secure API Token. Do NOT ask for or validate the
-API Token.
-
-1. **Region detection** — try in order, stop at first hit:
-   a. If Step 0b detected `has_url`: derive the region from the URL.
-   b. Else if an API Token is already available (env var
-      `SYSDIG_SECURE_API_TOKEN`, existing `.sysdig-token` file, or Step 0b
-      `has_token`): run `scripts/detect-region.sh` opportunistically — it
-      only reads the token, never writes or stores. If Step 0b's
-      `best_token_var` is a legacy name (e.g. `SDC_SECURE_TOKEN`,
-      `SYSDIG_MCP_API_TOKEN`, `SECURE_API_TOKEN`), bridge it ephemerally
-      for this single call — e.g.
-      `SYSDIG_SECURE_API_TOKEN="${SDC_SECURE_TOKEN}" scripts/detect-region.sh`
-      — do NOT write `.sysdig-token` in the K8s/Linux flow. Use the
-      detected region.
-   c. Else ask the user for their Sysdig region (see
-      [regions.md](references/regions.md)).
-   Do NOT prompt for an API Token just to detect the region — asking the
-   user for the region directly is faster.
-2. The Agent Access Key will be placed directly in the generated
-   configuration (Helm `values.yaml` or `dragent.yaml`) as a placeholder.
-   Tell the user: "You'll need your **Agent Access Key** — find it in
-   Sysdig UI → Settings → Agent Keys. I'll add a placeholder in the
-   config for you to fill in."
-3. **Do NOT create `.sysdig-token`** for K8s/Linux-only onboarding.
-   Never auto-fetch the Access Key from the API — multiple keys may
-   exist, the token may lack permission, or the user may have been given
-   a specific admin-provisioned key.
+- **Cloud Accounts** use the **Sysdig Secure API Token**, stored in
+  `.sysdig-token` — the skill `source`s it, NEVER reads its contents.
+- **For Kubernetes / Linux Hosts (Agent Access Key):** these use the **Agent
+  Access Key** (Settings → Agent Keys), NOT the Secure API Token.
+  Do NOT ask for or validate the API Token.
+  **Do NOT create `.sysdig-token` for K8s**/Linux-only onboarding — the key
+  goes into the generated config as a placeholder that **the user fills by
+  editing the file directly** (`values.yaml` / `dragent.yaml`). Never ask for
+  the key in chat, and never pass it via `helm --set` or a `! export` env var —
+  agent Bash calls run in fresh subshells that don't see the user's interactive
+  shell, so the value never reaches the install. See
+  [references/generate-config.md](references/generate-config.md).
 
 #### 2b-ii. Context detection & prerequisites
 
-Run proactively in parallel. **Only run `validate_prereqs.sh` when the
-provider is already known** (e.g., user said "onboard my AWS account");
-otherwise defer to after Step 3a. Run via a subagent:
-
-**For Cloud Accounts:**
-- `scripts/validate_prereqs.sh <provider> --json` — check required tools
-- `aws sts get-caller-identity` — detect AWS account ID, caller ARN, and active profile
-- `aws configure list-profiles` — list available AWS profiles
-- `gcloud config get-value project` — detect GCP project
-- `az account show --query id -o tsv` — detect Azure subscription
-
-**For Kubernetes:**
-- `scripts/validate_prereqs.sh kubernetes --json` — check kubectl, helm
-- `kubectl config current-context` — detect active cluster
-- `kubectl cluster-info` — verify connectivity
-- `helm repo list` — check if sysdig repo is added
-- `kubectl get ns sysdig-agent --ignore-not-found` — returning user check
-
-**For Linux Hosts:**
-- `scripts/validate_prereqs.sh host --json` — check required tools
+Run the per-target detection commands proactively in parallel via a subagent.
+**Only run `validate_prereqs.sh` when the provider is already known** (e.g.,
+user said "onboard my AWS account"); otherwise defer to after Step 3a. Cloud
+detection covers `aws sts get-caller-identity` / `gcloud` / `az`; Kubernetes
+covers `kubectl config current-context`, `kubectl cluster-info`, and
+`helm repo list`. Full command lists per target — and the rule to pre-fill
+detected values in wizard options and skip detection for CLIs that aren't
+installed — are in
+[references/credential-setup.md](references/credential-setup.md).
 
 **Prerequisite failures are blocking.** If `validate_prereqs.sh` reports
 missing tools, surface them immediately with fix commands — do NOT
-continue the interview until resolved. Only show what's missing.
+continue the interview until resolved. Re-run it with `--blockers` and show
+its output **verbatim**: the script renders the prescribed blocker block
+(one `❌` line + `Fix:` line per failure, platform-appropriate fix, ending
+with the reply-"ready" line). Do NOT reformat it into a table, numbered
+list, or paragraph; do NOT add `Blocker N` numbering; show only what the
+script printed.
 
-Pre-fill detected values (account ID, cluster name, etc.) in wizard
-options. Skip detection for CLIs that aren't installed.
+**Config-only path — when the user asks to proceed past the gate.** The gate
+protects the user; it is not an absolute stop. If the user explicitly asks to
+bypass it ("unblock", "skip", "proceed anyway", "just generate the config") —
+or asks for config-only / IaC output up front ("I'll deploy from CI/CD") — do
+NOT silently continue. Onboarding is IaC: generating the config and applying it
+are separate steps, often done by different people or a pipeline. So:
+
+1. State plainly what you will and won't do — you will generate (and validate,
+   if the tooling is present) the configuration, but you will NOT apply or
+   deploy it; that is a separate step for an authenticated persona or pipeline.
+2. Confirm with AskUserQuestion (header `Prerequisites`) — three options,
+   single-select. **Use these exact labels and descriptions, do NOT paraphrase
+   or drop one:**
+   - `Yes, proceed anyway` — "Generate the configuration now without the missing
+     tools; nothing will be applied."
+   - `No, I'll set up first` — "Exit so you can install the prerequisites, then
+     re-run." (This is the safe default — prefer it when the user is unsure.)
+   - `Stop here` — "Cancel onboarding."
+   Emit step 1's plain statement and this AskUserQuestion in the **same turn** —
+   never end a turn with only the statement (CHAIN RULE).
+3. On confirm, continue the interview. For any auto-detection that needed a
+   missing tool (e.g. `kubectl` cluster context, `aws sts` identity), ask the
+   user directly or leave the value as an explicit parameter for the next stage
+   to supply — never silently skip it. Mark substituted values in the recap so
+   they are not mistaken for detected ones (`Source` = `User-supplied` or
+   `Parameterized`, see [references/confirmation-flow.md](references/confirmation-flow.md)).
+   Only auto-detected **identity/context** values may be left `Parameterized`
+   this way. Feature-configuration choices the interview gathers (e.g. Cloud
+   Logs regions and the other `*_CLOUDLOGS` placeholders in the pre-generation
+   ambiguity gate) are the user's decisions, not deploy-time facts — resolve
+   them by asking; never leave them as unresolved placeholders. **The account
+   pin is special:** the value that guards against wrong-account deploys (AWS
+   `allowed_account_ids`) must be set from the account the user *confirms as
+   their intended target* and carried into the handoff as such — never left for
+   the apply stage to back-fill from its ambient credentials, which would make
+   the guard self-confirm against whatever account runs the apply. Record the
+   intended account ID even without working credentials; if the user genuinely
+   can't provide it, flag it in the runbook as a safety pin the applier must set
+   deliberately. (Region behaves similarly — it affects the deploy, so ask
+   rather than silently defer. The sibling `{{AWS_PROFILE}}` is deploy-environment
+   context — resolve it from the confirmed setup or follow the template's
+   "remove if using env vars / instance roles" comment; never leave the raw
+   token.)
+4. Validate best-effort if the tooling allows (your judgment — e.g. `terraform
+   validate`, `helm template`); if not, say validation is deferred. Note
+   `terraform validate` is offline (syntax/schema only) but first needs
+   `terraform init` (provider download — network, not credentials); `terraform
+   plan` needs working credentials, so it is unavailable when those are the
+   missing prerequisite. If the missing tool is itself the validator (e.g.
+   `helm`), or `init`/network is unavailable, validation is necessarily
+   deferred — say so.
+5. Skip apply/deploy/verify. In their place, produce a short handoff runbook:
+   the commands the next persona or pipeline must run and every value they must
+   supply. (For Kubernetes, the config is the generated Helm values; the handoff
+   runbook is the `helm upgrade --install` command the next stage runs.)
+6. Record what happened as a short, plain status sentence in the summary and
+   `customer-log.md` — not a fixed "mode" value (see
+   [references/session-logging.md](references/session-logging.md)).
+
+**Invariant:** on this path you NEVER apply or deploy, and you NEVER skip a step
+silently — every value you could not resolve is surfaced to the user and to the
+next stage.
 
 **Cloud account identity pinning (CHAIN RULE).** The detected credentials
 may not match the account the user intends to onboard — e.g., their
@@ -340,8 +403,9 @@ default AWS profile may point to a different account. After detection:
    - Terraform `provider "aws"` block: set `profile` and
      `allowed_account_ids` (see templates).
    - All `aws` CLI commands: prefix with `AWS_PROFILE=<name>`.
-   - All `source .sysdig-token && terraform` commands: prefix with
-     `AWS_PROFILE=<name>`.
+   - All terraform commands: put the prefix on the `terraform` invocation —
+     `source .sysdig-token && AWS_PROFILE=<name> terraform ...` (a prefix
+     on `source` does not reach terraform).
    - Prerequisite and permission checks (`validate_prereqs.sh`,
      `check_permissions.sh`): prefix with `AWS_PROFILE=<name>`.
 5. NEVER run AWS CLI or Terraform commands that rely on the default
@@ -364,42 +428,17 @@ skip this question — do NOT re-ask what you already know. Only use
 AskUserQuestion when the provider is ambiguous. See
 [interview-questions.md](references/interview-questions.md#step-3a-cloud-provider).
 
-**Experimental provider disclaimer.** When the selected provider is **GCP**
-or **Azure** (whether chosen via the picker or stated by the user), present
-this notice once before continuing the interview:
-
-> **Heads up — [GCP/Azure] support is experimental**
->
-> The onboarding flow for [GCP/Azure] has not been fully tested yet.
-> Here's what that means:
->
-> - **What works well:** Terraform configuration generation, permission
->   validation, and post-deployment verification — built on the same
->   infrastructure as the fully tested AWS flow.
-> - **What may need your input:** Provider-specific edge cases
->   (organization scoping, troubleshooting) may require you to fill in
->   details I can't fully guide you through yet.
-> - **Recommendation:** Review the generated Terraform carefully before
->   applying, and keep the
->   [Sysdig docs](https://docs.sysdig.com/) handy for provider-specific
->   questions.
->
-> Want to proceed?
-
-Wait for confirmation before continuing. If the user declines, offer to
-switch to AWS or Kubernetes instead.
-
-**Experimental flow behavior.** For the remainder of an experimental
-provider session:
-- After generating Terraform (Step 7), explicitly tell the user to
-  review it before applying — do not assume the template covers all
-  edge cases.
-- If the user hits an error you cannot diagnose from known-issues.md
-  or troubleshooting.md, say so honestly: "This is an area where the
-  experimental flow has gaps — here's what I'd try, but you may need
-  to check the Sysdig docs or open a support ticket."
-- Do NOT invent troubleshooting steps. If the reference doc is a stub,
-  acknowledge the gap rather than guessing.
+**Experimental provider handling.** Present the experimental-support disclaimer
+**once** before continuing the interview when the selected scope is experimental,
+then apply the experimental flow behavior for the rest of the session
+(review-before-apply reminder, honest gap acknowledgement, no invented
+troubleshooting, offer to switch to a Supported target if the user declines).
+**Azure single subscription and GCP single project are Supported — no
+disclaimer.** **Azure tenant** scope and **GCP organization** scope are still
+experimental; present the disclaimer at Step 3b when that scope is selected (see
+below). The full prescribed disclaimer text and behavior rules are in
+[references/experimental-providers.md](references/experimental-providers.md) —
+present the disclaimer verbatim.
 
 #### 3b. Scope
 
@@ -410,6 +449,15 @@ For **organizations**: ask about management account confirmation,
 include/exclude filters, and auto-onboarding for new accounts. See provider
 references for org-specific details: [aws.md](references/aws.md),
 [gcp.md](references/gcp.md), [azure.md](references/azure.md).
+
+**Azure tenant and GCP organization are experimental.** When the provider is GCP
+**and** scope is Organization, present the experimental disclaimer once
+([experimental-providers.md](references/experimental-providers.md), with
+`{provider}` = "GCP organization") before continuing, and apply the experimental
+flow behavior. Likewise when the provider is Azure **and** scope is
+tenant / management-group, present the disclaimer with `{provider}` = "Azure
+tenant". **Azure single subscription** and GCP **single project** are Supported —
+no disclaimer.
 
 #### 3c. Preflight checklist
 
@@ -424,14 +472,69 @@ See [interview-questions.md](references/interview-questions.md#step-3d-security-
 for the AskUserQuestion spec and descriptions. For capability-to-feature
 mapping and template markers, see [references/features.md](references/features.md).
 
-#### 3d-ii. Log capture method & regions (AWS only)
+**GCP branches here.** GCP's optional set is **Threat Detection**, **Advanced
+Identity Analysis**, **Host Scanning**, and **Workload Scanning** (foundational —
+Inventory, Posture & Compliance, Basic Identity — is always included). Use the
+**Step 3d (GCP)** section of interview-questions.md (GCP capability picker →
+Select Scanning Types → Select Workload Types) and **skip** the AWS-only
+sub-steps 3d-ii, 3d-iii (regions) and 3d-iv. Advanced Identity needs CDR — keep
+the `CDR` block when it is selected. GCP CDR has no capture-method/region
+question (project-wide Pub/Sub).
 
-If Cloud Logs selected AND provider is AWS — see
+**Azure branches here.** Azure's optional set is **Threat Detection**, **Host
+Scanning**, and **Workload Scanning** (foundational — Inventory, Posture &
+Compliance, Basic Identity — is always included; **no Advanced Identity Analysis**
+at single-subscription scope, which is tenant-only). Use the **Step 3d (Azure)**
+section of interview-questions.md (Azure capability picker → Event Hub region if
+Threat Detection → Select Scanning Types → Select Workload Types) and **skip**
+the AWS-only sub-steps 3d-ii, 3d-iii and 3d-iv. Unlike GCP, Azure CDR **does**
+need a region (Event Hub) — ask it only when
+Threat Detection is selected. Host Scanning offers Container scanning only
+(malware always off); Workload Scanning sets `aks_enabled`/`functions_enabled` per
+the selected types.
+
+#### 3d-ii. Log capture method & Cloud Logs regions (AWS only)
+
+If **Threat Detection** or **Advanced Identity Analysis** selected AND provider
+is AWS (Advanced Identity Analysis needs the same Cloud Logs data) — see
 [interview-questions.md](references/interview-questions.md#step-3d-ii-log-capture-method-aws-only).
 
-If EventBridge selected, also ask **log region selection** — see
-[interview-questions.md](references/interview-questions.md#log-region-selection-eventbridge).
-Always include `us-east-1` (captures global events).
+Then ask **Cloud Logs region selection** for either capture method — see
+[interview-questions.md](references/interview-questions.md#cloud-logs-region-selection).
+Always include `us-east-1` (captures global events). Resolve `EVENT_BRIDGE_REGIONS`
+(EventBridge) or `CLOUD_LOGS_REGIONS` (CloudTrail/S3) — kept separate from Host
+Scanning regions. For CloudTrail/S3, also collect the trail / bucket / SNS topic
+(plus its creation flag and region) / KMS sub-answers — see
+[aws.md](references/aws.md) — so no `{{...}}` placeholder is left unresolved.
+
+In **EventBridge** mode there is an optional **"Select Sources"** customization
+(default = all sources, recommended). **Do not raise it proactively** — only if
+the user asks to trim which log sources are forwarded. It resolves the optional
+`{{EVENT_BRIDGE_EVENT_PATTERN}}` placeholder; load
+[log-source-customization.md](references/log-source-customization.md) only then.
+For the default, **delete** that placeholder line and its comment block.
+
+#### 3d-iii. Host Scanning sub-options & regions (AWS)
+
+If **Host Scanning** selected AND provider is AWS — ask the container/malware
+sub-options (resolve `AGENTLESS_SCANNING_FLAGS`) and a dedicated Host Scanning
+region question (resolve `AGENTLESS_SCANNING_REGIONS`). These are AWS-template
+features; the GCP/Azure agentless modules take no flag/region inputs here. See
+[interview-questions.md](references/interview-questions.md#step-3d-iii-host-scanning-sub-options--regions-aws).
+
+#### 3d-iv. Serverless workload scanning (AWS Lambda/ECS, GCP Cloud Run)
+
+If **Workload Scanning** selected, ask which serverless targets to scan:
+**AWS** Lambda and/or ECS/Fargate; **GCP** Cloud Run. Scanning is agentless —
+no agent, sidecar, or task-definition change is required; Sysdig scans the
+images the workloads reference. Each target resolves to a sub-marker inside the
+template's `WORKLOAD_SCANNING` block (and, for Lambda,
+`{{LAMBDA_SCANNING_ENABLED}}`) — see
+[features.md](references/features.md#serverless-workload-scanning-aws-terraform).
+This is **vulnerability scanning only**; serverless *runtime* detection is a
+separate product this skill does not generate (see the provider support tiers).
+Question spec:
+[interview-questions.md](references/interview-questions.md#step-3d-iv-serverless-workload-scanning).
 
 #### 3e. Terraform backend
 
@@ -449,24 +552,45 @@ If onboarding Kubernetes, read
 > **Key difference:** Kubernetes uses the **Agent Access Key** (Settings →
 > Agent Keys), not the API Token used for cloud accounts.
 
+**Windows nodes (experimental).** If the cluster has Windows worker nodes
+(`kubectl get nodes -l kubernetes.io/os=windows`), offer Windows Host Shield
+via the same `shield` Helm chart: set `host_windows.enabled: true` (image
+`quay.io/sysdig/host-shield`, amd64 nodes, `kubernetes.io/os: windows`
+nodeSelector), reusing the Agent Access Key already collected. **Only two
+capabilities are available on Windows — host posture and host vulnerability
+scanning.** Runtime threat detection, drift/malware control, activity audit,
+and response actions are silently dropped by the chart on Windows; do NOT
+offer them. See [references/shield.md](references/shield.md) for the Windows
+values block.
+
 ### Step 5: Linux Host Details
 
 If onboarding Linux hosts, read
-[references/host-shield.md](references/host-shield.md). Use the
-AskUserQuestion specs defined there for: distro/version, install method,
-features.
+[references/host-shield.md](references/host-shield.md) for the full
+interview flow (§4), feature profiles (§4c, §5), and install methods (§6).
+
+> **Key difference:** Linux hosts use the **Agent Access Key** (Settings →
+> Agent Keys), not the API Token used for cloud accounts. The config uses
+> the `features.*` structure — see the Feature Reference (§5) for all keys.
+>
+> **Experimental:** config generation is verified against the Sysdig agent
+> sources, but the guided host flow has not been tested end-to-end. Tell the
+> user this once, and recommend they review the generated config before
+> applying.
 
 ---
 
 ### Step 5b: Confirmation & Edit
 
-After collecting all answers, present a confirmation summary table. See
+After collecting all answers, present a confirmation summary table —
+rendered by `scripts/render-recap.sh`, not hand-written. See
 [references/confirmation-flow.md](references/confirmation-flow.md) for:
-- Table format per target type (Cloud / K8s / Host)
+- The renderer contract + row schema per target type (Cloud / K8s / Host)
 - Edit protocol (change one setting without restarting the interview)
 - Ambiguity check (gate generation on 100% completeness)
 
-**Do NOT proceed to generation until the user confirms "Looks good".**
+**Do NOT proceed to generation until the user confirms with the "Looks good —
+proceed" option.**
 
 ---
 
@@ -481,118 +605,81 @@ already validated in Step 2b (kubectl/cluster connectivity).
 
 #### 6a. Permission pre-flight (cloud accounts)
 
-Spawn a subagent to run `scripts/check_permissions.sh <provider> <scope> <features>`.
-The subagent should return a structured pass/fail summary.
-**AWS fallback:** On cross-account roles, SimulatePrincipalPolicy may fail;
-the script falls back to service-level probes. Warn this cannot detect
-action-level SCP restrictions.
-
-**STOP** if checks fail. Explain what's missing, offer a remediation policy,
-and re-run via subagent after fixes.
-
-> See [references/permissions.md](references/permissions.md) for details.
+Spawn a subagent to run `scripts/check_permissions.sh <provider> <scope> <features>`,
+passing the comma-separated `<features>` keys for every selected capability. The
+subagent returns a structured pass/fail summary. **STOP** if checks fail —
+explain what's missing, offer a remediation policy, and re-run after fixes. The
+capability → `<features>` key mapping and the cross-account `SimulatePrincipalPolicy`
+fallback (cannot detect action-level SCP restrictions) are in
+[references/permissions.md](references/permissions.md); the full preflight
+command catalog and allow-list patterns are in
+[references/permission-patterns.md](references/permission-patterns.md).
 
 ---
 
 ### Step 7: Generate Configuration
 
 Read ALL required templates in a single parallel batch at the start of this
-step — main template + `variables.tf` + optional `backend_*.tf`. Do not read
-templates before this step. **Proceed directly to file generation with no
-intermediate output** — do not explain which templates you read, which
-sections you are removing, or which capabilities were excluded. Just say
-you are generating the Terraform configuration and write the files.
+step, then **proceed directly to file generation with no intermediate
+output** — just say you are generating the configuration and write the files.
+The full per-target procedure is in
+[references/generate-config.md](references/generate-config.md):
 
-**For cloud accounts:**
-1. Select template from `templates/` (e.g., `aws_single_account.tf`).
-2. Replace all `{{PLACEHOLDER}}` values with user's answers.
-3. **AWS account pinning:** Always set `profile` and `allowed_account_ids`
-   in the `provider "aws"` block using the values confirmed in Step 2b.
-   This ensures Terraform fails fast if credentials don't match the
-   intended account. See template comments for the pattern.
-4. Remove unselected capabilities using `# === MARKER ===` / `# === END MARKER ===`
-   delimiters. See [references/features.md](references/features.md).
-5. If remote backend, include matching `templates/backend_*.tf`.
-6. Adapt for special requirements. See provider references.
-7. Present completed Terraform for review.
-8. Token is in `.sysdig-token` (Step 0b). Use
-   `source .sysdig-token && terraform plan`. Ensure `.gitignore`
-   covers `*.tfvars` and `.sysdig-token`.
-9. Run `source .sysdig-token && terraform init` and
-   `source .sysdig-token && terraform plan` proactively.
-   For AWS with a specific profile, prefix with `AWS_PROFILE=<name>`.
+- **Cloud accounts (AWS)** — fill `{{PLACEHOLDER}}` values, **always set `profile`
+  and `allowed_account_ids`** from the Step 2b confirmed values, strip
+  unselected capabilities via `# === MARKER ===` delimiters
+  (see [features.md](references/features.md)), then run
+  `source .sysdig-token && terraform init`/`plan` proactively and offer
+  `terraform apply` **only with explicit user approval**.
+- **Cloud accounts (GCP)** — first apply `templates/gcp_api_enablement.tf` in a
+  separate folder (the "Set Up GCP APIs" step), or confirm the 6 required APIs
+  are enabled. GCP has no `profile`/`allowed_account_ids` pin — confirm the
+  project ID before apply. Generate from `templates/gcp_single_project.tf`: fill
+  `{{GCP_PROJECT_ID}}` / `{{GCP_REGION}}` / `{{AGENTLESS_SCANNING_FLAGS}}`, then
+  keep only the selected feature markers — `CDR` (Threat Detection),
+  `CIEM Advanced` (Advanced Identity; also keep `CDR`), `VM` (Host Scanning),
+  `WORKLOAD_SCANNING` (keep ≥1 `WORKLOAD_*` sub-marker) — and strip the rest.
+- **Cloud accounts (Azure)** — if Host Scanning is selected, ensure the
+  `Microsoft.ManagedServices` provider is registered on the subscription (see
+  [azure.md §1](references/azure.md)). Azure has no `profile`/`allowed_account_ids`
+  pin — confirm the **Subscription ID + Tenant ID** before apply. Generate from
+  `templates/azure_single_sub.tf`: fill `{{AZURE_SUBSCRIPTION_ID}}` /
+  `{{AZURE_TENANT_ID}}` / `{{SYSDIG_SECURE_URL}}`, and for selected features
+  `{{AZURE_REGION}}` (CDR Event Hub), `{{AGENTLESS_SCANNING_FLAGS}}` (Container
+  only — malware always `false`), and `{{AKS_ENABLED}}` / `{{FUNCTIONS_ENABLED}}`
+  (workload toggles). Keep only the selected markers — `CDR` (Threat Detection),
+  `VM` (Host Scanning), `WORKLOAD_SCANNING` (keep ≥1 `WORKLOAD_*` sub-marker) —
+  and strip the rest. There is **no** `CIEM Advanced` block for Azure single
+  subscription (tenant-only).
 
-**Terraform plan summary:** After `terraform plan`, parse the summary line
-and present a structured overview:
-```
-**Plan:** 8 to create, 0 to change, 0 to destroy
-- 2 IAM roles, 2 IAM policies, 4 Sysdig feature registrations
-```
-
-Then offer `terraform apply` — **only with explicit user approval**.
-
-**For Kubernetes clusters:**
-Read [shield.md §6–7](references/shield.md) for Helm commands and values
-reference. Generate `values.yaml` from `templates/shield-values.yaml`:
-replace `{{PLACEHOLDER}}` values, flip `enabled: true` for selected features
-(see [shield.md §5.2](references/shield.md) for profile mapping), and remove
-unused PROXY/CUSTOM_CA sections. Run `helm template` proactively to validate,
-then present `helm upgrade --install` for user approval.
-
-**For Linux hosts:** Read [host-shield.md](references/host-shield.md),
-generate config from `templates/dragent.yaml`, provide install commands.
+**Lint before validating (all targets):** after writing the files, run
+`scripts/lint_config.sh <generated files>` — it must pass (no `{{...}}`
+left, feature markers balanced, no mutually-exclusive marker pairs) before
+`terraform init`/`plan` or `helm template`. Fix reported errors and re-run.
+- **Kubernetes** — generate `values.yaml` from `templates/shield-values.yaml`;
+  see [shield.md §6–7](references/shield.md). For clusters with Windows nodes,
+  also set `host_windows.enabled: true` (posture + vuln only) — see
+  [generate-config.md](references/generate-config.md).
+- **Linux hosts** — generate from `templates/host-shield.yaml`;
+  see [host-shield.md](references/host-shield.md) and
+  [generate-config.md](references/generate-config.md).
 
 ---
 
 ### Step 8: Post-Installation Verification
 
 **Always run verification checks via a subagent** (Agent tool) to keep the
-main conversation clean. The subagent handles retries and verbose output,
-then returns a structured result.
-
-**Cloud accounts:**
-Spawn a subagent to:
-1. Run `terraform state list` — report resource count.
-2. Run `scripts/verify-cloud-status.sh <provider> <account_id> --expect`.
-   If account not yet visible, retry with backoff (60s, 120s, 180s). Max 3
-   cycles with `[Verification 1/3]` headers.
-3. Return a structured result: feature status, resource count, pass/fail.
-
-On subagent completion, present the receipt to the user. On max retries
-reached: "Check Sysdig > Integrations > Cloud Accounts in ~15 min."
-
-If `terraform apply` fails, consult
-[references/troubleshooting.md](references/troubleshooting.md).
-
-**Kubernetes clusters:**
-Spawn a subagent to run the 5-check verification sequence defined in
-[shield.md §6 "Post-Installation Verification"](references/shield.md).
-Checks: pod status, DaemonSet coverage, agent auth, backend connectivity,
-driver health. Wait 30s before starting; retry up to 3 times at 30s intervals.
-On failure, consult [shield.md §9](references/shield.md) for remediation.
-
-**Linux hosts:** Subagent runs `systemctl status dragent` — check active (running).
-
-If issues arise, consult [troubleshooting.md](references/troubleshooting.md)
-and [known-issues.md](references/known-issues.md).
-
-#### Sysdig Links
-
-After verification, show clickable URLs (plain text, not Markdown links)
-using the Sysdig Secure URL from Step 0b. Keep the message short —
-don't re-list enabled features.
-
-> Cloud Accounts: {{SYSDIG_SECURE_URL}}/#/data-sources/cloud-accounts/{{PROVIDER}}?accountId={{SYSDIG_ACCOUNT_ID}}&statusFilter=All
-> Inventory: {{SYSDIG_SECURE_URL}}/#/inventory
-> Events (if CDR): {{SYSDIG_SECURE_URL}}/#/events?last=86400
-
-**Internal IDs:** The Sysdig internal account ID (UUID from
-`module.onboarding.sysdig_secure_account_id` or the cloudauth API) is
-an internal identifier. It is fine to embed in backlink URLs (e.g., the
-`accountId` query param above), but do NOT display it as standalone
-information in conversation, reports, or summary tables. User-facing
-identifiers should be the cloud provider's own account/project/
-subscription ID.
+main conversation clean; the subagent handles retries and verbose output and
+returns a structured result. Per-target check sequences (cloud:
+`terraform state list` + `verify-cloud-status.sh` with backoff; Kubernetes:
+the 5-check Shield sequence (also covers Windows-node pods); Linux hosts: a
+6-check sequence — service/auth/connectivity/credential over journald, plus
+config-error and per-capability checks against `/opt/draios/logs/draios.log`,
+which journald does not carry), the
+post-verification **Sysdig Links** block, and the **Internal IDs** display rule
+are in [references/verification.md](references/verification.md). On failure,
+consult [troubleshooting.md](references/troubleshooting.md) and
+[known-issues.md](references/known-issues.md).
 
 ---
 
@@ -612,9 +699,12 @@ metadata, capabilities, `terraform state list`, tf config, backlinks)
 1. **Update `customer-log.md`** — proactively, including for failed attempts.
 2. **Create/update `environment.yaml`** — confirm with user. See
    [Environment Defaults](#customer-log--environment-defaults).
-3. **Suggest next steps** (each in a new session): additional accounts/
-   clusters, more capabilities, K8s Shield features via `helm upgrade`,
-   `/sysdig-sla` for posture scanning, MCP integrations
+3. **Suggest next steps** (each in a new session): `/sysdig-account-setup` to
+   configure teams, users, and roles for the connected account;
+   `/sysdig-investigate` to prioritize which vulnerable images to fix first;
+   `/sysdig-posture` for posture policies and compliance; additional
+   accounts/clusters, more capabilities, K8s Shield features via `helm upgrade`,
+   MCP integrations
    ([references/integrations.md](references/integrations.md)).
 4. If file writes are denied, present content in a code block.
 
@@ -635,6 +725,11 @@ To disconnect an account from Sysdig, see
 pre-destroy checklist, dependency-aware destroy ordering, state cleanup,
 post-destroy verification, session file updates.
 
+For a **Linux host**, follow the "Linux host offboarding" section of the same
+file. Package removal alone is not enough: `apt-get purge` / `yum remove` leaves
+`/opt/draios/etc/dragent.yaml` — **with the Agent Access Key in it** — on the
+host, so `rm -rf /opt/draios` and the leftover sweep are required steps.
+
 ---
 
 ## Handling Edge Cases
@@ -644,7 +739,10 @@ post-destroy verification, session file updates.
   `environment.yaml` or `terraform state list`, generate only the delta.
   See [references/incremental-onboarding.md](references/incremental-onboarding.md).
 - **Returning customer**: Read `environment.yaml` + `customer-log.md` to
-  skip known questions and anticipate problems.
+  skip known questions and anticipate problems. If the last entry's status
+  shows config was generated but not applied (config-only path), offer to apply
+  it now — rejoin the normal apply/verify path (Step 8) — before starting a
+  fresh interview. See [references/session-logging.md](references/session-logging.md).
 - **Troubleshooting**: Switch to troubleshooting mode. Read
   [troubleshooting.md](references/troubleshooting.md) and
   [known-issues.md](references/known-issues.md).

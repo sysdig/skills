@@ -8,11 +8,13 @@
 #   provider: aws | gcp | azure
 #   scope:    single | organization (default: single)
 #   features: comma-separated list (default: cspm)
-#             valid: cspm, cdr, cdr_cloudlogs, ciem, vm
+#             valid: cspm, cdr, cdr_cloudlogs, ciem, vm,
+#                    workload_scanning
 #
 # Examples:
 #   check_permissions.sh aws single cspm,cdr
 #   check_permissions.sh aws single cspm,cdr_cloudlogs  # CloudTrail/S3 CDR mode
+#   check_permissions.sh aws single cspm,vm,workload_scanning
 #   check_permissions.sh gcp organization cspm,cdr,vm
 #   check_permissions.sh azure tenant cspm
 #
@@ -40,6 +42,7 @@ WARN=0
 SIMULATE_AVAILABLE=true
 IS_ASSUMED_ROLE=false
 IS_ORG_MEMBER=false
+IS_MANAGEMENT_ACCOUNT=false
 SIMULATE_FAILURES=0
 SIMULATE_CIRCUIT_BROKEN=false
 AWS_PROFILE_ARG=""
@@ -111,7 +114,7 @@ probe_aws_service() {
     fi
 
     # Check for known "not found" patterns (means the call reached the service)
-    if echo "$output" | grep -qi "NoSuchEntity\|NotFoundException\|not found\|does not exist\|ResourceNotFoundException"; then
+    if echo "$output" | grep -qi "NoSuchEntity\|NotFoundException\|not found\|does not exist\|ResourceNotFoundException\|NonExistentQueue"; then
         pass "${service_label} — service accessible (resource not found, expected)"
         return
     fi
@@ -161,10 +164,26 @@ check_aws_permissions_fallback() {
     if [[ "$features" == *"cdr"* ]] && [[ "$features" != *"cdr_cloudlogs"* ]]; then
         echo ""
         echo "  CDR (EventBridge):"
+        # Probe with read actions that ARE in the onboarding policy set
+        # (events:DescribeRule, sqs:GetQueueAttributes) rather than broad list
+        # actions (events:ListRules, sqs:ListQueues) the least-privilege policy
+        # intentionally omits — those return AccessDenied for an identity that can
+        # actually onboard, producing false failures. Nonexistent resources yield
+        # a "not found" (probe passes) when the action is permitted.
         probe_aws_service "EventBridge" \
-            aws events list-rules --limit 1
-        probe_aws_service "SQS" \
-            aws sqs list-queues --max-results 1
+            aws events describe-rule --name "sysdig-nonexistent-probe-${probe_ts}"
+        local sqs_region sqs_acct
+        sqs_region=$(aws configure get region 2>/dev/null || echo "${AWS_REGION:-${AWS_DEFAULT_REGION:-}}")
+        sqs_acct=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) || sqs_acct=""
+        if [[ -n "$sqs_region" && -n "$sqs_acct" ]]; then
+            probe_aws_service "SQS" \
+                aws sqs get-queue-attributes \
+                --queue-url "https://sqs.${sqs_region}.amazonaws.com/${sqs_acct}/sysdig-nonexistent-probe-${probe_ts}" \
+                --attribute-names QueueArn
+        else
+            warn "SQS — cannot probe (region/account unresolved); sqs:CreateQueue" \
+                 "is required for CDR. Ensure your identity can create SQS queues before apply."
+        fi
     fi
 
     # --- CDR (CloudTrail/S3 — cloud-logs) ---
@@ -181,10 +200,22 @@ check_aws_permissions_fallback() {
     if [[ "$features" == *"vm"* ]]; then
         echo ""
         echo "  Vulnerability Management (Agentless Scanning):"
+        # EC2 requires --max-results >= 5 (a value of 1 throws InvalidParameterValue,
+        # which the probe would misreport as "inconclusive"). ec2:DescribeSnapshots
+        # is in the onboarding policy set.
         probe_aws_service "EC2 (Snapshots)" \
-            aws ec2 describe-snapshots --owner-ids self --max-results 1
+            aws ec2 describe-snapshots --owner-ids self --max-results 5
+        # Probe kms:DescribeKey (in the onboarding policy set) against a nonexistent
+        # alias rather than kms:ListKeys (which the least-privilege policy omits).
         probe_aws_service "KMS" \
-            aws kms list-keys --limit 1
+            aws kms describe-key --key-id "alias/sysdig-nonexistent-probe-${probe_ts}"
+    fi
+
+    # --- Workload Scanning (ECS + Lambda) ---
+    if [[ "$features" == *"workload_scanning"* ]]; then
+        echo ""
+        echo "  Workload Scanning (ECS + Lambda):"
+        info "IAM role/policy creation (probed above)$([[ "$scope" == "organization" ]] && echo " + CloudFormation StackSets (probed under Organization scope)")"
     fi
 
     # --- Org member SCP warning ---
@@ -209,12 +240,13 @@ check_aws_permissions() {
     echo "AWS Permission Check (scope: ${scope}, features: ${features})"
     echo "---"
 
-    # Get caller identity
-    local caller_arn
-    caller_arn=$(aws sts get-caller-identity --query Arn --output text 2>/dev/null) || {
+    # Get caller identity — account and ARN in a single API call
+    local identity caller_account caller_arn
+    identity=$(aws sts get-caller-identity --query '[Account,Arn]' --output text 2>/dev/null) || {
         fail "Cannot determine AWS caller identity. Are you authenticated?"
         return
     }
+    read -r caller_account caller_arn <<< "$identity" || true
     info "Identity: ${caller_arn}"
 
     # Detect if running from the AWS Organization management account
@@ -224,8 +256,6 @@ check_aws_permissions() {
     master_account=$(aws organizations describe-organization \
         --query Organization.MasterAccountId --output text 2>/dev/null) || master_account=""
     IS_MANAGEMENT_ACCOUNT=false
-    local caller_account
-    caller_account=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
     if [[ -n "$master_account" && "$caller_account" == "$master_account" ]]; then
         IS_MANAGEMENT_ACCOUNT=true
         warn "Running from the Organization management account. SCPs do NOT apply to" \
@@ -260,34 +290,33 @@ check_aws_permissions() {
     fi
 
     # Use simulate-principal-policy to test permissions
-    # This is the most reliable way to check without actually creating resources
+    # This is the most reliable way to check without actually creating resources.
+    # Actions are batched into ONE API call per section (not one per action).
 
     # --- Always required: IAM permissions for onboarding ---
     echo ""
     echo "  Onboarding (always required):"
+    # NOTE: Sysdig modules always create resources WITH tags, so the "tag"
+    # companion of every "create" action is a hard requirement — e.g.
+    # vm-workload-scanning calls CreatePolicy with tags, which needs both
+    # iam:CreatePolicy AND iam:TagPolicy. Probe the tag companions too,
+    # otherwise a minimal policy missing them fails silently at apply time.
     local iam_actions=("iam:CreateRole" "iam:AttachRolePolicy" "iam:PutRolePolicy"
-                       "iam:CreatePolicy" "iam:TagRole" "iam:GetRole"
+                       "iam:CreatePolicy" "iam:TagRole" "iam:TagPolicy" "iam:GetRole"
                        "iam:ListAttachedRolePolicies" "iam:ListRolePolicies")
-
-    for action in "${iam_actions[@]}"; do
-        check_aws_action "$simulate_arn" "$action"
-    done
+    simulate_actions "$simulate_arn" "" "${iam_actions[@]}"
 
     # --- Organization-specific ---
     if [[ "$scope" == "organization" ]]; then
         echo ""
         echo "  Organization scope:"
         local org_actions=("organizations:ListAccounts" "organizations:DescribeOrganization"
-                           "organizations:ListRoots" "organizations:ListOrganizationalUnitsForParent")
-        for action in "${org_actions[@]}"; do
-            check_aws_action "$simulate_arn" "$action"
-        done
-
-        local cfn_actions=("cloudformation:CreateStackSet" "cloudformation:CreateStackInstances"
+                           "organizations:ListRoots" "organizations:ListOrganizationalUnitsForParent"
+                           # CreateStackSet is called with tags -> cloudformation:TagResource is required
+                           "cloudformation:CreateStackSet" "cloudformation:CreateStackInstances"
+                           "cloudformation:TagResource"
                            "cloudformation:DescribeStackSet" "cloudformation:ListStackInstances")
-        for action in "${cfn_actions[@]}"; do
-            check_aws_action "$simulate_arn" "$action"
-        done
+        simulate_actions "$simulate_arn" "" "${org_actions[@]}"
 
         # Check CloudFormation Organizations Access (required for SERVICE_MANAGED StackSets)
         echo ""
@@ -313,38 +342,49 @@ check_aws_permissions() {
     if [[ "$features" == *"cdr"* ]] && [[ "$features" != *"cdr_cloudlogs"* ]]; then
         echo ""
         echo "  CDR (EventBridge):"
+        # The event-bridge module creates the rule and SQS queue with tags →
+        # events:TagResource / sqs:TagQueue are required companions.
         local cdr_actions=("events:PutRule" "events:PutTargets" "events:DescribeRule"
-                           "events:ListTargetsByRule" "events:DeleteRule"
-                           "sqs:CreateQueue" "sqs:GetQueueAttributes")
-        for action in "${cdr_actions[@]}"; do
-            check_aws_action "$simulate_arn" "$action"
-        done
+                           "events:ListTargetsByRule" "events:DeleteRule" "events:TagResource"
+                           "sqs:CreateQueue" "sqs:GetQueueAttributes" "sqs:TagQueue")
+        simulate_actions "$simulate_arn" "" "${cdr_actions[@]}"
     fi
 
     # --- CDR (CloudTrail/S3 — cloud-logs) ---
     if [[ "$features" == *"cdr_cloudlogs"* ]]; then
         echo ""
         echo "  CDR (CloudTrail/S3 — cloud-logs):"
-        local cdr_cl_actions=("s3:GetBucketAcl" "s3:GetObject" "s3:ListBucket"
-                              "sns:Subscribe" "sns:GetTopicAttributes"
-                              "iam:CreateRole" "iam:PutRolePolicy")
-        for action in "${cdr_cl_actions[@]}"; do
-            check_aws_action "$simulate_arn" "$action"
-        done
         # SNS CreateTopic only needed if create_topic=true
         info "sns:CreateTopic — needed only if creating a new SNS topic (create_topic=true)"
-        check_aws_action "$simulate_arn" "sns:CreateTopic"
+        local cdr_cl_actions=("s3:GetBucketAcl" "s3:GetObject" "s3:ListBucket"
+                              "sns:Subscribe" "sns:GetTopicAttributes"
+                              "iam:CreateRole" "iam:PutRolePolicy" "sns:CreateTopic")
+        simulate_actions "$simulate_arn" "" "${cdr_cl_actions[@]}"
     fi
 
     # --- VM (Agentless Scanning) ---
     if [[ "$features" == *"vm"* ]]; then
         echo ""
         echo "  Vulnerability Management (Agentless Scanning):"
+        # The agentless-scanning module creates the KMS key with tags →
+        # kms:TagResource is a required companion to kms:CreateKey.
         local vm_actions=("ec2:DescribeSnapshots" "ec2:DescribeVolumes"
-                          "kms:CreateKey" "kms:CreateAlias" "kms:DescribeKey")
-        for action in "${vm_actions[@]}"; do
-            check_aws_action "$simulate_arn" "$action"
-        done
+                          "kms:CreateKey" "kms:CreateAlias" "kms:DescribeKey" "kms:TagResource")
+        simulate_actions "$simulate_arn" "" "${vm_actions[@]}"
+    fi
+
+    # --- Workload Scanning (ECS + Lambda) ---
+    if [[ "$features" == *"workload_scanning"* ]]; then
+        echo ""
+        echo "  Workload Scanning (ECS + Lambda):"
+        # The vm-workload-scanning module creates IAM roles/policies (covered by
+        # the always-required IAM checks above). Organization scope additionally
+        # uses CloudFormation StackSets (covered by the Organization scope checks).
+        if [[ "$scope" == "organization" ]]; then
+            info "IAM role/policy creation (checked above) + CloudFormation StackSets (checked under Organization scope)"
+        else
+            info "IAM role/policy creation only (checked above) — no additional services"
+        fi
     fi
 
     # --- Circuit breaker fallback ---
@@ -356,46 +396,74 @@ check_aws_permissions() {
     fi
 }
 
-check_aws_action() {
-    local principal="$1"
-    local action="$2"
+# simulate_actions <principal> <soft_csv> <action> [action...]
+# Simulate ALL given actions in a single SimulatePrincipalPolicy API call
+# (one round-trip per section instead of one per action) and report a
+# pass/fail/warn line per action.
+# <soft_csv>: comma-separated actions whose non-allowed decision is reported
+# as a WARNING instead of a hard failure — for actions that cannot be
+# simulated accurately without a concrete resource ARN / request context
+# (e.g. iam:PassRole, which least-privilege policies scope to a specific role
+# with an iam:PassedToService condition that simulation against "*" can't model).
+simulate_actions() {
+    local principal="$1" soft_csv="$2"
+    shift 2
+    local actions=("$@")
+    [[ ${#actions[@]} -eq 0 ]] && return 0
 
-    # Circuit breaker: if too many consecutive simulation failures, skip
+    # Circuit breaker: if simulation keeps failing, skip (fallback re-checks)
     if [[ "$SIMULATE_CIRCUIT_BROKEN" == "true" ]]; then
-        return
+        return 0
     fi
 
-    # Fetch both EvalDecision and OrganizationsDecisionDetail in one call
-    local eval_result
-    eval_result=$(aws iam simulate-principal-policy \
+    # One line per action: EvalActionName<TAB>EvalDecision<TAB>AllowedByOrganizations
+    local results
+    results=$(aws iam simulate-principal-policy \
         --policy-source-arn "$principal" \
-        --action-names "$action" \
-        --query 'EvaluationResults[0].{Decision:EvalDecision,AllowedByOrg:OrganizationsDecisionDetail.AllowedByOrganizations}' \
-        --output json 2>/dev/null) || {
+        --action-names "${actions[@]}" \
+        --query 'EvaluationResults[].[EvalActionName,EvalDecision,OrganizationsDecisionDetail.AllowedByOrganizations]' \
+        --output text 2>/dev/null) || {
         SIMULATE_FAILURES=$((SIMULATE_FAILURES + 1))
-        if [[ $SIMULATE_FAILURES -ge 3 ]]; then
+        if [[ $SIMULATE_FAILURES -ge 2 ]]; then
             SIMULATE_CIRCUIT_BROKEN=true
-            warn "${action} — could not simulate (3 consecutive failures, switching to fallback)"
+            warn "could not simulate ${actions[*]} (repeated failures, switching to fallback)"
         else
-            warn "${action} — could not simulate (may lack iam:SimulatePrincipalPolicy)"
+            warn "could not simulate ${actions[*]} (may lack iam:SimulatePrincipalPolicy)"
         fi
-        return
+        return 0
     }
     # Reset failure counter on success
     SIMULATE_FAILURES=0
 
-    local decision allowed_by_org
-    decision=$(echo "$eval_result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('Decision','unknown'))" 2>/dev/null)
-    allowed_by_org=$(echo "$eval_result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('AllowedByOrg','None'))" 2>/dev/null)
-
-    if [[ "$decision" == "allowed" ]]; then
-        pass "${action}"
-    elif [[ "$IS_MANAGEMENT_ACCOUNT" == "true" && "$allowed_by_org" == "False" ]]; then
-        warn "${action} — blocked by SCP (${decision}), but management accounts" \
-             "are exempt from SCPs at runtime — this is a known false positive"
-    else
-        fail "${action} — ${decision}"
-    fi
+    local action decision allowed_by_org
+    while IFS=$'\t' read -r action decision allowed_by_org; do
+        [[ -z "$action" ]] && continue
+        if [[ "$decision" == "allowed" ]]; then
+            pass "${action}"
+        elif [[ "$IS_MANAGEMENT_ACCOUNT" == "true" && "$allowed_by_org" == "False" ]]; then
+            warn "${action} — blocked by SCP (${decision}), but management accounts" \
+                 "are exempt from SCPs at runtime — this is a known false positive"
+        elif [[ "$IS_ORG_MEMBER" == "true" && "$decision" == "implicitDeny" && "$allowed_by_org" == "False" ]]; then
+            # Member-account false negative: from a member account, simulate cannot
+            # positively resolve the org's SCP allows (reading SCPs is a
+            # management-account capability), so it folds AllowedByOrganizations=false
+            # into EvalDecision=implicitDeny even when the identity can perform the
+            # action at runtime. Mirror the management-account handling and downgrade
+            # to a warning rather than a hard failure — member-account SCP simulation
+            # is not reliable enough to fail-hard on.
+            warn "${action} — ${decision}, but this is driven by OrganizationsDecisionDetail" \
+                 "(AllowedByOrganizations=false). Member accounts cannot resolve org SCP allows" \
+                 "via simulation, so this is likely a false negative. Confirm at apply time; if" \
+                 "terraform apply fails with an SCP error, see references/troubleshooting.md"
+        elif [[ ",${soft_csv}," == *",${action},"* ]]; then
+            warn "${action} — ${decision} (simulated against all resources without" \
+                 "request context; least-privilege policies that scope this to the" \
+                 "execution role with iam:PassedToService=cloudformation.amazonaws.com" \
+                 "will show this — confirm the role can be passed to CloudFormation)"
+        else
+            fail "${action} — ${decision}"
+        fi
+    done <<< "$results"
 }
 
 # ---------------------------------------------------------------------------
@@ -422,7 +490,7 @@ check_gcp_permissions() {
     info "Project: ${project}"
 
     local account
-    account=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null)
+    account=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null) || account=""
     info "Identity: ${account}"
 
     # Use testIamPermissions to check project-level permissions
@@ -481,26 +549,51 @@ check_gcp_project_permissions() {
     shift
     local permissions=("$@")
 
-    # Build the permissions JSON array
-    local perms_json
+    # gcloud has NO `projects test-iam-permissions` subcommand — testIamPermissions
+    # is only exposed on the Cloud Resource Manager REST API. Call it directly with
+    # an access token; this evaluates EFFECTIVE permissions, including any granted
+    # via group membership. (No jq dependency — grep the JSON, matching the script's
+    # no-JSON-parser style.)
+    local token
+    token=$(gcloud auth print-access-token 2>/dev/null) || token=""
+    if [[ -z "$token" ]]; then
+        warn "Could not obtain a gcloud access token (run 'gcloud auth login'); skipping permission test on ${project}"
+        return
+    fi
+
+    local perms_json resp granted
     perms_json=$(printf '"%s",' "${permissions[@]}")
     perms_json="[${perms_json%,}]"
 
-    local result
-    result=$(gcloud projects test-iam-permissions "$project" \
-        --permissions="$(IFS=,; echo "${permissions[*]}")" \
-        --format=json 2>/dev/null) || {
-        warn "Could not test permissions on project ${project}"
+    # The access token is passed via `-K`, reading a config file from a process
+    # substitution pipe, instead of `-H` on the command line — a command line can
+    # be inspected by other local processes for as long as the call runs. `printf`
+    # is a bash builtin, so the token never lands in any process's arguments.
+    # Same hardening as detect-region.sh and verify-cloud-status.sh.
+    resp=$(curl -s -X POST \
+        -K <(printf 'header = "Authorization: Bearer %s"\n' "$token") \
+        -H "Content-Type: application/json" \
+        "https://cloudresourcemanager.googleapis.com/v1/projects/${project}:testIamPermissions" \
+        -d "{\"permissions\":${perms_json}}" 2>/dev/null) || {
+        warn "Could not reach the Resource Manager API to test permissions on ${project}"
         return
     }
 
+    if grep -q '"error"' <<< "$resp"; then
+        local msg
+        msg=$(grep -oE '"message"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$resp" | head -1 \
+            | sed -E 's/.*"message"[[:space:]]*:[[:space:]]*"([^"]*)"/\1/')
+        warn "Permission test failed on ${project}: ${msg:-unknown error}"
+        return
+    fi
+
+    # Granted permission strings are dotted tokens (e.g. "iam.roles.create");
+    # the "permissions" JSON key has no dot, so it is not matched.
+    granted=$(grep -oE '"[a-z0-9_]+(\.[a-zA-Z0-9_]+)+"' <<< "$resp" | tr -d '"')
+
+    local perm
     for perm in "${permissions[@]}"; do
-        if echo "$result" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-granted = data.get('permissions', [])
-sys.exit(0 if '$perm' in granted else 1)
-" 2>/dev/null; then
+        if grep -qxF "$perm" <<< "$granted"; then
             pass "${perm}"
         else
             fail "${perm}"
@@ -525,87 +618,152 @@ check_azure_permissions() {
         fail "Cannot determine Azure subscription. Run 'az login'"
         return
     }
-    sub_id=$(az account show --query id --output tsv 2>/dev/null)
-    tenant_id=$(az account show --query tenantId --output tsv 2>/dev/null)
+    sub_id=$(az account show --query id --output tsv 2>/dev/null) || sub_id=""
+    tenant_id=$(az account show --query tenantId --output tsv 2>/dev/null) || tenant_id=""
     info "Subscription: ${sub_name} (${sub_id})"
     info "Tenant: ${tenant_id}"
 
-    # Get current user's object ID
+    # Get the current identity's object ID. 'az ad signed-in-user show' only
+    # works for a delegated USER login; a non-interactive service-principal
+    # login (az login --service-principal / ARM_CLIENT_ID env) returns no
+    # signed-in user, so fall back to resolving the SP's own object id. Both
+    # the RBAC (--assignee) and Entra (principalId eq) queries below accept an
+    # SP object id, so this makes the preflight accurate for SP-based installs.
     local user_id
-    user_id=$(az ad signed-in-user show --query id --output tsv 2>/dev/null) || {
-        warn "Cannot get signed-in user info. Some Entra ID checks will be skipped."
-    }
+    user_id=$(az ad signed-in-user show --query id --output tsv 2>/dev/null) || user_id=""
+    if [[ -z "$user_id" ]]; then
+        local acct_type acct_name
+        acct_type=$(az account show --query user.type --output tsv 2>/dev/null) || acct_type=""
+        acct_name=$(az account show --query user.name --output tsv 2>/dev/null) || acct_name=""
+        if [[ "$acct_type" == "servicePrincipal" && -n "$acct_name" ]]; then
+            user_id=$(az ad sp show --id "$acct_name" --query id --output tsv 2>/dev/null) || user_id=""
+            if [[ -n "$user_id" ]]; then
+                info "Authenticated as a service principal (appId ${acct_name}); checking its role assignments."
+            fi
+        fi
+        if [[ -z "$user_id" ]]; then
+            warn "Cannot resolve the signed-in identity's object id. Some RBAC/Entra ID checks will be skipped."
+        fi
+    fi
 
     # Check Azure RBAC role assignments
     echo ""
     echo "  Azure RBAC Roles:"
 
-    local roles
-    roles=$(az role assignment list --assignee "${user_id:-unknown}" \
-        --scope "/subscriptions/${sub_id}" \
-        --query "[].roleDefinitionName" --output tsv 2>/dev/null) || {
-        warn "Cannot list role assignments."
-        roles=""
-    }
+    # Collect the identity's role assignments once, across every scope that can
+    # grant the install the rights it needs. Two queries are required and their
+    # flags are mutually exclusive in the Azure CLI:
+    #   --all                            → assignments *under* the subscription
+    #                                      (resource groups / resources)
+    #   --scope <sub> --include-inherited → the subscription itself PLUS
+    #                                      assignments inherited from a parent
+    #                                      management group or the tenant root
+    # Using only --all reports a false negative for an installer who holds Owner
+    # or User Access Administrator at a management group, which blocks a
+    # legitimate install.
+    local sub_tree_roles inherited_roles all_roles
+    sub_tree_roles=$(az role assignment list --assignee "${user_id:-unknown}" \
+        --all --query "[].roleDefinitionName" --output tsv 2>/dev/null) || sub_tree_roles=""
+    inherited_roles=$(az role assignment list --assignee "${user_id:-unknown}" \
+        --scope "/subscriptions/${sub_id}" --include-inherited \
+        --query "[].roleDefinitionName" --output tsv 2>/dev/null) || inherited_roles=""
+    all_roles=$(printf '%s\n%s\n' "$sub_tree_roles" "$inherited_roles")
+    if [[ -z "${sub_tree_roles}${inherited_roles}" ]]; then
+        warn "Cannot list role assignments (no assignments returned, or the identity" \
+             "lacks Microsoft.Authorization/roleAssignments/read). The RBAC checks below" \
+             "may report false negatives."
+    fi
 
     # Check for User Access Administrator
-    if echo "$roles" | grep -qi "User Access Administrator"; then
+    if echo "$all_roles" | grep -qi "User Access Administrator"; then
         pass "User Access Administrator (RBAC)"
     else
-        # Also check at management group level
-        local mg_roles
-        mg_roles=$(az role assignment list --assignee "${user_id:-unknown}" \
-            --all --query "[].roleDefinitionName" --output tsv 2>/dev/null) || mg_roles=""
-        if echo "$mg_roles" | grep -qi "User Access Administrator"; then
-            pass "User Access Administrator (inherited from management group)"
+        fail "User Access Administrator — not found on the subscription, inherited from a" \
+             "management group, or under the subscription"
+    fi
+
+    # Contributor / Owner. CDR (Event Hub) needs at least Contributor; Host and
+    # Workload Scanning assign roles (disk-snapshot / container access) and set
+    # up Azure Lighthouse, which require Owner (Contributor cannot assign roles).
+    local has_owner=false has_contrib=false
+    echo "$all_roles" | grep -qi "^Owner$" && has_owner=true
+    echo "$all_roles" | grep -qi "^Contributor$" && has_contrib=true
+
+    if [[ "$features" == *"vm"* ]] || [[ "$features" == *"workload_scanning"* ]]; then
+        if [[ "$has_owner" == "true" ]]; then
+            pass "Owner (RBAC) — required to assign Host/Workload Scanning roles"
+        elif [[ "$has_contrib" == "true" ]]; then
+            warn "Owner not found (only Contributor). Host/Workload Scanning assign roles" \
+                 "(disk-snapshot / container access) and set up Lighthouse, which Contributor" \
+                 "cannot do — Owner (or User Access Administrator for the assignments) is" \
+                 "required at apply time."
         else
-            fail "User Access Administrator — not found on subscription or management group"
+            fail "Owner — not found (required to assign Host/Workload Scanning roles)"
+        fi
+    elif [[ "$features" == *"cdr"* ]] || [[ "$features" == *"ciem"* ]]; then
+        if [[ "$has_owner" == "true" || "$has_contrib" == "true" ]]; then
+            pass "Contributor/Owner (RBAC) — needed to create the Event Hub for CDR"
+        else
+            fail "Contributor — not found (required to create the Event Hub for CDR)"
         fi
     fi
 
-    # Check for Contributor (needed for CDR, CIEM, VM)
-    if [[ "$features" == *"cdr"* ]] || [[ "$features" == *"ciem"* ]] || [[ "$features" == *"vm"* ]]; then
-        if echo "$roles" | grep -qi "^Contributor$"; then
-            pass "Contributor (RBAC) — needed for CDR/CIEM/VM"
-        elif echo "$roles" | grep -qi "^Owner$"; then
-            pass "Owner (RBAC) — includes Contributor permissions"
+    # Microsoft.ManagedServices provider registration (Azure Lighthouse backs
+    # agentless Host Scanning). A subscription prerequisite, not a Terraform
+    # resource — the apply fails creating the Lighthouse definition if missing.
+    if [[ "$features" == *"vm"* ]]; then
+        local mms
+        mms=$(az provider show --namespace Microsoft.ManagedServices \
+            --query registrationState --output tsv 2>/dev/null) || mms=""
+        if [[ "$mms" == "Registered" ]]; then
+            pass "Microsoft.ManagedServices provider registered (Host Scanning / Lighthouse)"
         else
-            fail "Contributor — not found (required for CDR, CIEM, or VM features)"
+            warn "Microsoft.ManagedServices not registered (state: ${mms:-unknown}). Host Scanning" \
+                 "needs it. Run: az provider register --namespace Microsoft.ManagedServices"
         fi
     fi
 
-    # Check Entra ID roles
+    # Check Entra ID roles.
+    # NOTE: query the roleManagement API, NOT transitiveMemberOf with a
+    # $filter=displayName — Graph rejects a $filter on that reference property
+    # with Request_UnsupportedQuery. roleManagement/directory/roleAssignments
+    # lists ACTIVE assignments only; a PIM-eligible role that has not been
+    # activated will NOT appear (activate it before running terraform apply).
     echo ""
     echo "  Entra ID Roles:"
 
-    # Check for Application Administrator
-    local app_admin
-    app_admin=$(az rest --method GET \
-        --url "https://graph.microsoft.com/v1.0/me/transitiveMemberOf?%24filter=displayName%20eq%20'Application%20Administrator'" \
-        --headers "ConsistencyLevel=eventual" \
-        --query "value | length(@)" --output tsv 2>/dev/null) || app_admin=""
-
-    if [[ "$app_admin" -gt 0 ]] 2>/dev/null; then
-        pass "Application Administrator (Entra ID)"
+    if [[ -z "${user_id:-}" ]]; then
+        warn "Entra ID roles — cannot verify (could not resolve an object id for the current" \
+             "identity: neither a signed-in user nor a service principal)." \
+             "Need Application Administrator + Privileged Role Administrator (or Global Administrator)."
     else
-        warn "Application Administrator — could not verify (check manually in Entra ID > Roles)"
+        # NOTE: the query MUST be guarded by 'if !' rather than assigning and
+        # testing $? afterwards — under 'set -e' a bare assignment from a failing
+        # command substitution aborts the whole script, so the warn branch would
+        # be unreachable and the run would end mid-report with exit 1. A
+        # service-principal token commonly lacks RoleManagement.Read.Directory,
+        # which is exactly when this call fails.
+        local entra_roles
+        if ! entra_roles=$(az rest --method GET \
+            --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?\$filter=principalId eq '${user_id}'&\$expand=roleDefinition" \
+            --query "value[].roleDefinition.displayName" --output tsv 2>/dev/null); then
+            warn "Entra ID roles — could not query the roleManagement API (insufficient Graph" \
+                 "permission on this token, e.g. RoleManagement.Read.Directory is not granted)." \
+                 "Verify manually: Entra ID > Roles and administrators" \
+                 "(need Application Administrator + Privileged Role Administrator, or Global Administrator)."
+        else
+            local r
+            for r in "Application Administrator" "Privileged Role Administrator"; do
+                if echo "$entra_roles" | grep -qiE "^${r}\$|^Global Administrator\$"; then
+                    pass "${r} (Entra ID)"
+                else
+                    warn "${r} — not among your ACTIVE Entra roles. If it is PIM-eligible, activate" \
+                         "it before 'terraform apply'; otherwise it must be assigned. (Entra ID >" \
+                         "Roles and administrators)"
+                fi
+            done
+        fi
     fi
-
-    # Check for Privileged Role Administrator
-    local priv_admin
-    priv_admin=$(az rest --method GET \
-        --url "https://graph.microsoft.com/v1.0/me/transitiveMemberOf?%24filter=displayName%20eq%20'Privileged%20Role%20Administrator'" \
-        --headers "ConsistencyLevel=eventual" \
-        --query "value | length(@)" --output tsv 2>/dev/null) || priv_admin=""
-
-    if [[ "$priv_admin" -gt 0 ]] 2>/dev/null; then
-        pass "Privileged Role Administrator (Entra ID)"
-    else
-        warn "Privileged Role Administrator — could not verify (check manually in Entra ID > Roles)"
-    fi
-
-    info "Entra ID role checks use Graph API and may show warnings if permissions are insufficient."
-    info "If warnings appear, verify roles manually: Azure Portal > Entra ID > Roles and Administrators"
 }
 
 # ---------------------------------------------------------------------------
@@ -616,13 +774,15 @@ if [[ $# -lt 1 ]]; then
     echo "  provider: aws | gcp | azure"
     echo "  scope:    single | organization | tenant (default: single)"
     echo "  features: comma-separated (default: cspm)"
-    echo "            valid: cspm, cdr, cdr_cloudlogs, ciem, vm"
+    echo "            valid: cspm, cdr, cdr_cloudlogs, ciem, vm,"
+    echo "                   workload_scanning"
     echo "            cdr = EventBridge mode, cdr_cloudlogs = CloudTrail/S3 mode"
     echo "  --aws-profile NAME: use a specific AWS CLI profile"
     echo ""
     echo "Examples:"
     echo "  $0 aws single cspm,cdr"
     echo "  $0 aws single cspm,cdr_cloudlogs"
+    echo "  $0 aws single cspm,vm,workload_scanning"
     echo "  $0 aws single cspm,cdr --aws-profile myprofile"
     echo "  $0 gcp organization cspm,cdr,vm"
     echo "  $0 azure tenant cspm"
@@ -668,6 +828,20 @@ echo " Scope:    ${SCOPE}"
 echo " Features: ${FEATURES}"
 [[ -n "$AWS_PROFILE_ARG" ]] && echo " AWS Profile: ${AWS_PROFILE_ARG}"
 echo "========================================"
+
+# Ambient static credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY) take
+# precedence over AWS_PROFILE in the AWS CLI. If a profile is in effect (via the
+# --aws-profile flag or an inherited AWS_PROFILE) AND ambient env creds are set,
+# every aws call below would silently run as the env-cred identity instead of the
+# profile's — so the check reports on the WRONG principal. Neutralize the env
+# creds within this script's process so the requested profile is authoritative.
+if [[ "$PROVIDER" == "aws" && -n "${AWS_PROFILE:-}" && -n "${AWS_ACCESS_KEY_ID:-}" ]]; then
+    echo ""
+    echo -e "  ${YELLOW}!${NC} AWS_PROFILE=${AWS_PROFILE} is set, but ambient AWS_ACCESS_KEY_ID would" \
+            "override it — unsetting env credentials for this check so the profile is honored." \
+            "Confirm the resolved 'Identity:' below is the account you intend to onboard."
+    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+fi
 
 case "$PROVIDER" in
     aws)    check_aws_permissions "$SCOPE" "$FEATURES" ;;

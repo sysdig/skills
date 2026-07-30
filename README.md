@@ -37,21 +37,32 @@ Once installed, describe what you need in plain language. Examples:
 
 ### Prerequisites
 
-- A **Sysdig Secure** account with API access
-- A **Sysdig API token** — generate one under **Settings → Sysdig Secure API** in your Sysdig instance
+- A **Sysdig Secure** account
 - A supported AI coding agent — **Claude Code** is the primary target; **Cursor**, **OpenAI Codex**, and **OpenCode** can use the bare skills via [Compatibility with other agents](#compatibility-with-other-agents)
 - **Python 3** — required by skill scripts (uses stdlib only, no `pip install` needed)
+- A **Sysdig API token** — *only* if you use `sysdig-onboarding` or `sysdig-posture`. Generate one under **Settings → Sysdig Secure API**. Every other skill authenticates via OAuth and needs no token.
 
-### Set up credentials
-
-The skills that call the Sysdig REST API or Terraform provider directly (`sysdig-api`, `sysdig-onboarding`, `sysdig-posture`) auto-discover credentials from your environment. Export them in your shell profile:
+### Install in Claude Code
 
 ```bash
-export SYSDIG_SECURE_URL="https://us2.app.sysdig.com"     # your Sysdig region URL
-export SYSDIG_SECURE_API_TOKEN="your-api-token"
+/plugin marketplace add sysdig/skills
 ```
 
-The hosted Sysdig **MCP server** does not use these variables — it is registered separately and authenticates via OAuth (see [Register the Sysdig MCP server](#register-the-sysdig-mcp-server) below).
+```bash
+/plugin install headless-cloud-security@sysdig-skills
+```
+
+The marketplace install loads the plugin skills and any per-skill MCP server dependencies declared in `agents/*.yaml`. The hosted Sysdig MCP server is **not** bundled — register it separately (next step).
+
+### Register the Sysdig MCP server
+
+Most skills reach your tenant through the hosted Sysdig MCP server, authenticated with OAuth — there is no token to copy. Register it once, pointing at your region's MCP URL (your region URL + `/mcp/secure`):
+
+```bash
+claude mcp add --transport http secure-mcp-server https://us2.app.sysdig.com/mcp/secure
+```
+
+Replace `us2.app.sysdig.com` with **your** region URL from the table below — the MCP URL is always your region URL + `/mcp/secure`. Then run `/mcp` → `secure-mcp-server` → **Authenticate** for the one-time OAuth sign-in. Once authenticated, describe what you need in plain language and the right skill loads automatically.
 
 **Sysdig region URLs:**
 
@@ -68,31 +79,18 @@ The hosted Sysdig **MCP server** does not use these variables — it is register
 | ME South — Dammam (me2) | `https://app.me2.sysdig.com` |
 | AP Tokyo (jp1) | `https://app.jp1.sysdig.com` |
 
-**Never paste credentials in chat.** Skills read them from environment variables only.
+> If your region isn't listed, self-host the Sysdig MCP server and register that URL instead. For other agents (Cursor, OpenAI Codex, OpenCode, Claude Desktop, ChatGPT, Gemini, …), register an HTTP MCP server at your region's `/mcp/secure` URL with OAuth — see each skill's `references/mcp-setup.md`.
 
-### Install in Claude Code
+### API token — only for some skills
 
-```bash
-/plugin marketplace add sysdig/skills
-```
+`sysdig-onboarding` and `sysdig-posture` call the Sysdig REST API or Terraform provider directly, so they need a token in your environment. (Every other skill uses OAuth — skip this section.) Export it in your shell profile, using your region URL from the [table above](#register-the-sysdig-mcp-server):
 
 ```bash
-/plugin install headless-cloud-security@sysdig-skills
+export SYSDIG_SECURE_URL="https://us2.app.sysdig.com"     # your Sysdig region URL
+export SYSDIG_SECURE_API_TOKEN="your-api-token"
 ```
 
-The marketplace install loads the plugin skills and any per-skill MCP server dependencies declared in `agents/*.yaml`. The hosted Sysdig MCP server is **not** bundled — register it separately (next step).
-
-### Register the Sysdig MCP server
-
-Most skills reach your tenant through the hosted Sysdig MCP server. Register it once, pointing at your region's MCP URL (your region URL + `/mcp/secure`):
-
-```bash
-claude mcp add --transport http secure-mcp-server https://us2.app.sysdig.com/mcp/secure
-```
-
-Then run `/mcp` → `secure-mcp-server` → **Authenticate** for the one-time OAuth sign-in. No API token is needed for the MCP server.
-
-> The hosted MCP server is available in the regions listed in each skill's `references/mcp-setup.md` region table — that table is the source of truth. If your region isn't listed, self-host the Sysdig MCP server and register that URL instead. For other agents (Cursor, OpenAI Codex, OpenCode, Claude Desktop, ChatGPT, Gemini, …), register an HTTP MCP server at your region's `/mcp/secure` URL with OAuth — see each skill's `references/mcp-setup.md`.
+Skills auto-discover these. **Never paste credentials in chat.** The hosted MCP server ignores these variables.
 
 ### Compatibility with other agents
 
@@ -133,13 +131,14 @@ The Sysdig MCP server is never bundled — you register it yourself with `claude
 
 | Skill | What it does |
 |-------|--------------|
-| [`sysdig-investigate`](plugins/headless-cloud-security/skills/sysdig-investigate) | Investigate vulnerable images in a Sysdig-monitored environment. Fetches and ranks images by a chosen risk metric (finding_count, exposure_time_weighted, exposure_time_avg, sla_compliance, or actually_exploitable_findings), builds a remediation plan, optionally creates a tracking ticket (Jira / Linear / GitHub Projects) using Sysdig-side signals to determine the assignee, and hands off to /sysdig-remediate. Triggers on: "investigate", "what should I fix", "show me vulnerable images", "prioritize vulnerabilities", "/sysdig-investigate". Not for opening PRs, applying code fixes, or generating Dockerfile patches — use /sysdig-remediate for that. |
-| [`sysdig-onboarding`](plugins/headless-cloud-security/skills/sysdig-onboarding) | Interactive onboarding assistant for Sysdig Secure. Guides users through connecting AWS cloud accounts and Kubernetes clusters to Sysdig. Presents security capabilities in plain language instead of jargon. Supports guided (interview) and autonomous (all-at-once) modes. Generates Terraform configurations for cloud accounts and Helm values for Kubernetes, validates prerequisites, deploys, and verifies connectivity. |
+| [`sysdig-account-setup`](plugins/headless-cloud-security/skills/sysdig-account-setup) | Baseline account setup for Sysdig Secure after a tenant is connected. Guided, interactive, modular setup via the Sysdig MCP server: (1) access baseline — teams, users, and roles; (2) vulnerability management policy baseline — Pipeline vs runtime, one policy or split; (3) compliance standards — assign posture policies (CIS, PCI, NIST, …) to zones; (4) runtime threat-detection — enable/disable the recommended managed detection policies. Reviews current state, proposes a structure, and applies changes idempotently with explicit confirmation before anything that mutates the tenant. Use right after onboarding to leave an account usable out of the box. Fine-grained policy tuning is out of scope. |
+| [`sysdig-investigate`](plugins/headless-cloud-security/skills/sysdig-investigate) | Investigate and prioritize vulnerable images in a Sysdig-monitored environment via two flows, routed from the user's goal. Plans flow — plan-driven prioritization: pick an admin-configured Plan (or explore ranked jobs under an ad-hoc scope and measure) and walk the prioritized remediation jobs one at a time. Findings flow — ad-hoc findings analysis: filter, regroup, sort, and page vulnerability findings the way the Vulnerability Management UI table does. Hands any chosen image off to /sysdig-remediate, which owns tickets, PRs, job tracking, and job closing. Triggers on: "investigate", "what should I fix", "what should I fix first", "show me my vulnerable images", "prioritize vulnerabilities", "which images are affected by CVE-...", "show me all Critical CVEs in production", "/sysdig-investigate". Not for opening PRs, applying fixes, or creating/updating tickets — use /sysdig-remediate for all of those. |
+| [`sysdig-onboarding`](plugins/headless-cloud-security/skills/sysdig-onboarding) | Interactive onboarding assistant for Sysdig Secure. Guides users through connecting AWS, GCP and Azure cloud accounts, Kubernetes clusters (including Windows nodes), and Linux hosts to Sysdig, plus serverless workload scanning (AWS ECS/Fargate, AWS Lambda, GCP Cloud Run). Presents security capabilities in plain language instead of jargon. Supports guided (interview) and autonomous (all-at-once) modes. Generates Terraform configurations for cloud accounts and Helm values for Kubernetes, validates prerequisites, deploys, and verifies connectivity. |
 | [`sysdig-posture`](plugins/headless-cloud-security/skills/sysdig-posture) | Author Sysdig Secure Posture custom controls (Rego) and custom policies, and emit Terraform via the Sysdig provider. Use when the user wants to "write a posture rule," "create a custom CSPM control," "fail my policy when an S3 bucket is unencrypted," or "group these CIS controls into a custom policy." Never writes to Sysdig directly — all writes go through Terraform on user approval. Not for: zone management, built-in Sysdig controls, runtime threat detection, vulnerable-image triage or remediation, or onboarding cloud accounts. |
-| [`sysdig-remediate`](plugins/headless-cloud-security/skills/sysdig-remediate) | Remediate one specific vulnerable container image. Fetches Critical/High CVEs from Sysdig, resolves a safe fix version via chain analysis, and opens a PR/MR (GitHub/GitLab) or emits a local patch. Triggers: "fix the nginx image", "patch CVE-2024-1234 in api-server", "remediate quay.io/org/app:tag", "/sysdig-remediate <image>". Not for: discovery, prioritization, or ticket creation — use /sysdig-investigate. |
-| [`sysdig-runtime-investigate`](plugins/headless-cloud-security/skills/sysdig-runtime-investigate) | Use this skill when investigating a runtime threat detected by Sysdig end-to-end. Surfaces the highest-priority threat, scores vulnerability vs runtime correlations on a 1-5 confidence scale, deep-dives into network blast radius or suspicious-binary VirusTotal lookups depending on the event class, and hands the case off to Jira or PagerDuty. Triggers on: "investigate runtime threat", "what is this Falco alert", "triage this SOC alert", "analyze runtime incident". Not for vulnerability prioritization (use `sysdig-investigate`) or remediation (use `sysdig-remediate`). |
+| [`sysdig-remediate`](plugins/headless-cloud-security/skills/sysdig-remediate) | Remediate one specific vulnerable container image and deliver the fix as a PR/MR, a tracking ticket, or both — this skill is the sole ticket creator in the Sysdig vulnerability workflow. Deduplicates existing work (job artifacts, Sysdig-created Jira tickets, external tickets and PRs) read-only, fetches Critical/High CVEs from Sysdig, resolves a safe fix version via chain analysis, opens a PR/MR (GitHub/GitLab) or emits a local patch, creates or updates the Jira ticket, records artifacts on the remediation job, and closes the job once the work is filed. Triggers: "fix the nginx image", "patch CVE-2024-1234 in api-server", "remediate quay.io/org/app:tag", "create a ticket for CVE-2024-9999", "file a Jira ticket for this image", "/sysdig-remediate <image>". Not for: discovery, prioritization, or slicing findings — use /sysdig-investigate. |
+| [`sysdig-runtime-investigate`](plugins/headless-cloud-security/skills/sysdig-runtime-investigate) | Use this skill when investigating a runtime threat detected by Sysdig end-to-end. Surfaces the highest-priority threat, scores vulnerability vs runtime correlations on a 1-5 confidence scale, deep-dives into network blast radius or suspicious-binary VirusTotal lookups depending on the event class, reconstructs the affected workload's activity audit trail (commands, connections, file accesses) as a timeline around the detection, and hands the case off to Jira or PagerDuty. Triggers on: "investigate runtime threat", "what is this Falco alert", "triage this SOC alert", "analyze runtime incident". Not for vulnerability prioritization (use `sysdig-investigate`) or remediation (use `sysdig-remediate`). |
 | [`sysdig-runtime-remediate`](plugins/headless-cloud-security/skills/sysdig-runtime-remediate) | Close the runtime loop on a Sysdig-detected threat: turn the investigation context into proposed response actions, analyse the blast radius on the affected workload, and execute (or file) the actions the user approves — one at a time, with explicit confirmation. Triggers: "remediate this runtime threat", "respond to event <id>", "act on this incident", "isolate / kill / pause that container", "/sysdig-runtime-remediate". Not for vulnerability fixes (use sysdig-remediate) or threat investigation itself (use sysdig-runtime-investigate). |
-| [`sysdig-sysql`](plugins/headless-cloud-security/skills/sysdig-sysql) | SysQL query language reference for Sysdig Secure. Use when writing, debugging, or explaining SysQL graph queries against the Sysdig security datastore. Triggers on: SysQL queries, Sysdig inventory/vulnerability/posture/identity/runtime queries, "write a SysQL query", "query sysdig for", "find vulnerable images", "show me workloads", or any task involving MATCH/RETURN syntax against Sysdig entities. Also use when exploring the SysQL schema (entities, fields, relationships). |
+| [`sysdig-sysql`](plugins/headless-cloud-security/skills/sysdig-sysql) | SysQL query language reference for Sysdig Secure. Use when writing, debugging, or explaining SysQL graph queries against the Sysdig security datastore. Triggers on: SysQL queries, Sysdig inventory/vulnerability/posture/identity/runtime queries, "write a SysQL query", "query sysdig for", "find vulnerable images", "show me workloads", or any task involving MATCH/RETURN syntax against Sysdig entities. Also use when exploring the SysQL schema (entities, fields, relationships). Each query's entities and fields are validated against the live schema before it is shown and run, and the results are presented with follow-up suggestions. |
 
 The list above is generated automatically on every publish from each skill's `SKILL.md` frontmatter.
 
@@ -156,6 +155,24 @@ skills/
 └── skills/
     └── <skill-name>/                     # bare-skill mirror (spec-compliant)
 ```
+
+## Scanning these skills with SkillSpector
+
+If you audit agent skills with [SkillSpector](https://github.com/NVIDIA/SkillSpector), this repository ships a reviewed baseline (`.skillspector-baseline.yaml`) that suppresses known false positives and intended-by-design findings, each with an explanation. Pass it so only new or genuinely actionable findings surface:
+
+```bash
+# Scan one skill with the shipped baseline (scan per-skill —
+# SkillSpector's --recursive mode does not apply --baseline).
+skillspector scan skills/<skill-name> --baseline .skillspector-baseline.yaml
+```
+
+The baseline is also copied inside each skill directory, so a single-skill install still carries it:
+
+```bash
+skillspector scan skills/<skill-name> --baseline skills/<skill-name>/.skillspector-baseline.yaml
+```
+
+Suppressed findings are reported as suppressed (with their justification) rather than dropped silently — for example, threat-detection documentation that references attacker techniques (IMDS endpoints, credential paths), the intentionally privileged Sysdig host agent, and documented credential auto-discovery from `SYSDIG_*` environment variables. Findings **not** in the baseline are real and worth reviewing.
 
 ## Maintenance and contributions
 

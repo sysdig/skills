@@ -238,11 +238,12 @@ catalog is authoritative. The recommended flow:
   action directly — the API rejects manual submission of pair-undo types
   like `START_CONTAINER`, `UNPAUSE_CONTAINER`, `FILE_UNQUARANTINE`,
   `DELETE_NETWORK_POLICY`, `KUBERNETES_DELETE_VOLUME_SNAPSHOT`).
-- When surfacing undo to the user, render the exact call they could run:
+- When surfacing undo to the user, make clear that **you** (the agent) perform
+  it on request — it is an MCP tool call, not a shell command the user can
+  paste. Phrase it so the action and the id are visible, e.g.:
 
-  ```
-  mcp__secure-mcp-server__undo_response_action  action_execution_id=b137bf86-...
-  ```
+  > To roll this back, ask me to undo it and I'll call `undo_response_action`
+  > with `action_execution_id=b137bf86-...`.
 
 ## Responder types
 

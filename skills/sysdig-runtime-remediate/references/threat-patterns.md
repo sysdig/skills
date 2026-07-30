@@ -92,22 +92,37 @@ namespace or with hostNetwork before applying.
 ## Credential theft / IMDS access
 
 **Typical surface:** event series showing access to the cloud metadata
-endpoint (`169.254.169.254`) from a pod, followed by suspicious AWS API
-calls.
+endpoint from a pod, followed by suspicious cloud-API calls. The endpoint
+differs by provider — AWS/Azure IMDS at `169.254.169.254`, GCP at
+`metadata.google.internal` (also `169.254.169.254`) with the
+`Metadata-Flavor: Google` header — but the pattern is the same: a workload
+reaching for credentials it shouldn't.
 
 **Common reasoning path:**
 
 1. **Cloud first, then runtime.** Kill the pod first and you've lost the
    pod but the *credentials are still out there*. The attacker has them.
-2. Verify in CloudTrail what the stolen role has been doing in the last
-   N hours (see [`architecture-probing.md`](architecture-probing.md) for
-   the lookup-events query).
-3. **Revoke the credentials in AWS** before doing anything to the pod.
-   Options, ordered by surgical-ness:
-   - Attach an `AWSDenyAll`-equivalent policy to the assumed role to cut
-     any active session immediately.
-   - Rotate any long-lived access keys the threat may have created.
-   - Disable the IAM user / SA mapping at the OIDC trust level.
+2. Verify what the stolen identity has been doing in the last N hours.
+   The provider-uniform way is the `FETCH_CLOUD_LOGS` CLOUD responder action
+   (pulls CloudTrail / GCP Audit / Azure Activity into Sysdig). For AWS with
+   a locally-authorized CLI, the CloudTrail `lookup-events` query in
+   [`architecture-probing.md`](architecture-probing.md) is the out-of-band
+   equivalent.
+3. **Revoke the credentials before doing anything to the pod.** The
+   provider-uniform action is `IAM_QUARANTINE` (CLOUD responder) — it attaches
+   a deny-all policy to the assumed identity and cuts any active session
+   immediately, regardless of cloud. The CLOUD responder is **not universally
+   deployed**, though — confirm `list_response_actions` actually surfaces it
+   for this tenant before promising it; if it doesn't, declare the gap and fall
+   back to the out-of-band, per-provider equivalents below, ordered by
+   surgical-ness:
+   - AWS — attach an `AWSDenyAll`-equivalent policy to the role; rotate any
+     long-lived access keys created; disable the IAM user / SA mapping at the
+     OIDC trust level.
+   - GCP — remove the IAM policy binding for the service account; disable or
+     delete leaked SA keys; revoke Workload Identity bindings.
+   - Azure — remove the role assignment / add a deny assignment; disable the
+     managed identity or service principal credentials.
 4. **Then containment on the pod.** `ISOLATE_NETWORK` to prevent further
    credential exfil, `KILL_PROCESS` on the offending process, and so on.
 5. **Audit downstream.** Once contained, hunt for everything the

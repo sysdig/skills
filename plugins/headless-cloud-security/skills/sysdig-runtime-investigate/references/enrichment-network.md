@@ -15,7 +15,12 @@ Also extract any DNS-like field if present (`dns.qname`, `dns.qtype`).
 
 ## Steps
 
-1. **Geolocate every distinct remote IP.** Prefer `ipinfo.io` (no API key, generous free tier):
+1. **Geolocate every distinct *public* remote IP.** First drop private/internal
+   addresses — RFC1918 (`10/8`, `172.16/12`, `192.168/16`), link-local
+   (`169.254/16`), loopback (`127/8`), and CGNAT (`100.64/10`). Never send
+   internal network topology to a third party; note skipped internal IPs in the
+   report as `geo: skipped (private)`. For the remaining public IPs, prefer
+   `ipinfo.io` (no API key, generous free tier):
 
    ```bash
    curl -s https://ipinfo.io/<ip>/json

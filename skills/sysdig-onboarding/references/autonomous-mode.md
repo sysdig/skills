@@ -10,10 +10,26 @@ target: cloud              # cloud | kubernetes | host
 provider: aws              # aws | gcp | azure
 scope: single              # single | organization
 sysdig_region: us1         # us1, us2, eu1, au1, me1, us4
-blocks: [trust, cloud_logs, scanning]  # trust is always required
-cdr_mode: eventbridge      # eventbridge | cloudtrail (AWS + cloud_logs only)
+blocks: [trust, threat_detection, advanced_identity, host_scanning, workload_scanning]
+                           # trust always required; the rest are optional.
+                           # workload_scanning is AWS-only.
+cdr_mode: eventbridge      # eventbridge | cloudtrail (AWS; applies when
+                           # threat_detection or advanced_identity is selected)
+log_sources: all           # optional, EventBridge only. "all" (default) =
+                           # Default Setup → DELETE the {{EVENT_BRIDGE_EVENT_PATTERN}}
+                           # placeholder line. To trim, list tokens from the
+                           # canonical table in log-source-customization.md, e.g.
+                           # [cloudtrail_management, console_signin, guardduty];
+                           # build event_pattern per that file's algorithm.
+host_scanning_extras: [container, malware]  # optional; malware is Preview
 backend: local             # local | s3 | gcs | azurerm
 ```
+
+Per-feature regions follow the same options
+as the guided flow — see [interview-questions.md](interview-questions.md) Step 3d
+and [features.md](features.md) for the capability→marker mapping. Older inputs
+using `cloud_logs` (→ `threat_detection`) and `scanning` (→ `host_scanning`)
+should be mapped to the names above.
 
 ## Flow
 
@@ -27,3 +43,8 @@ backend: local             # local | s3 | gcs | azurerm
 8. After apply: verify (Step 8) and update logs (Step 9)
 
 If any param is missing, ask only for that specific value.
+
+**Optional placeholders are deleted, not left unresolved.** When `log_sources`
+is omitted or `all`, remove the `{{EVENT_BRIDGE_EVENT_PATTERN}}` placeholder line
+(and its comment block) from the template — never leave the literal `{{…}}`
+token or emit an empty `event_pattern`.

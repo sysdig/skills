@@ -28,9 +28,12 @@ onboarding session:
 > - Run destructive commands without explicit approval
 > - Make changes outside the generated working directory
 >
-> **Supported targets:** AWS cloud accounts and Kubernetes clusters are
-> fully tested. GCP and Azure cloud onboarding is available but not yet
-> extensively tested.
+> **Supported targets:** AWS cloud accounts, Kubernetes clusters, GCP
+> single-project cloud accounts, and Azure single-subscription cloud accounts
+> are fully tested. Azure tenant and GCP organization onboarding, Linux hosts,
+> Windows nodes (via Kubernetes), and serverless workload scanning (AWS Lambda /
+> ECS-Fargate, GCP Cloud Run) are available but not yet extensively tested —
+> I'll flag it again when you pick one.
 >
 > **Tools used:** This setup uses **Terraform**, cloud provider CLIs
 > (AWS, Google Cloud, Azure), **Helm**, and **kubectl**. If you prefer

@@ -181,6 +181,18 @@ kubectl -n <ns> get pod <pod> -o jsonpath='{.spec.volumes}' | jq '.[] | {name, s
 Only after the user authorizes the AWS surface. The user must also confirm
 the active profile and region before any call.
 
+> **Cloud coverage.** AWS is the worked example for the out-of-band CLI path.
+> The skill does **not** bundle `gcloud` / `az` recipes — for **GCP** (Workload
+> Identity, Cloud Audit Logs) and **Azure** (Workload Identity, Activity /
+> Entra logs), prefer the SysQL cloud-identity recipe above plus the in-product
+> **CLOUD responder** Response Actions (`FETCH_CLOUD_LOGS`, `IAM_QUARANTINE`,
+> `MAKE_PRIVATE_CLOUD_RESOURCE`), which Sysdig surfaces uniformly across
+> providers — see [`response-actions-catalog.md`](response-actions-catalog.md).
+> If you do have a GCP/Azure CLI authorized out of band, the read-only intent
+> below maps directly (identity → `gcloud iam` / `az role assignment`; audit
+> log → Cloud Logging / `az monitor activity-log`), but treat those as
+> user-driven, not skill-bundled.
+
 ### Verify the account matches the threat FIRST
 
 Before asking the user to authorize AWS reads, confirm the active

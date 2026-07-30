@@ -7,12 +7,17 @@ description: >
   "write a SysQL query", "query sysdig for", "find vulnerable images", "show me
   workloads", or any task involving MATCH/RETURN syntax against Sysdig entities.
   Also use when exploring the SysQL schema (entities, fields, relationships).
+  Each query's entities and fields are validated against the live schema before it
+  is shown and run, and the results are presented with follow-up suggestions.
 allowed-tools:
   - AskUserQuestion
   - Read
   - Write
   - mcp__secure-mcp-server__run_sysql
   - mcp__secure-mcp-server__generate_sysql
+  - mcp__secure-mcp-server__get_sysql_entity
+  - mcp__secure-mcp-server__list_sysql_entities
+version: 1.0.1
 ---
 
 ## First-run notice (Public Beta)
@@ -31,7 +36,7 @@ When you need to ask the user a question, get confirmation, or present choices, 
 
 # SysQL Query Language
 
-SysQL is a Sysdig proprietary, graph query language. It models cloud and container security data as a graph of **entities** (resources, vulnerabilities, controls, identities, runtime events) connected by **relationships** (`AFFECTED_BY`, `HAS_INSTALLED`, `IN`, `VIOLATES`, …). Translate the user's natural-language request into a precise SysQL query, run it, and present the result.
+SysQL is a Sysdig proprietary, graph query language. It models cloud and container security data as a graph of **entities** (resources, vulnerabilities, controls, identities, runtime events) connected by **relationships** (`AFFECTED_BY`, `HAS_INSTALLED`, `IN`, `VIOLATES`, …). Translate the user's natural-language request into a precise query, validate its entities and fields against the live schema, show the query, run it, and present the result.
 
 Refer to [`references/sysql_reference.md`](references/sysql_reference.md) for the complete language reference.
 
@@ -39,165 +44,123 @@ Refer to [`references/sysql_reference.md`](references/sysql_reference.md) for th
 
 **What I'll do:**
 
-- Build SysQL queries from your natural-language question.
-- **Read** data from your Sysdig Secure datastore via the `run_sysql` MCP tool.
-- Show the query I'm about to run, so you can inspect it before results come back.
-- If I can't build a working query in 3 attempts, fall back to the `generate_sysql` MCP tool and show you the regenerated query before running it.
-- Communicate when results are truncated by `LIMIT`.
+- Build a SysQL query from your natural-language question.
+- **Validate it against the live Sysdig schema before running** — confirm every entity, field and relationship really exists, and correct guessed names (e.g. a wrong `Vulnerability.fixAvailableAt` → the real `fixDate`).
+- **Show you each query right before I run it** — the main one *and* every exploratory or diagnostic one — in a fenced code block, but **only once it's validated against the live schema** (never a draft, guess, or invalid query). I never state a finding without showing the query behind it, and close with the synthesised analysis. This holds for **every** question, including every follow-up.
+- Suggest follow-up questions so you can dig deeper.
+- Fall back to the `generate_sysql` MCP tool if I can't build a valid query, then show you that query with its results like any other.
 
 **What I won't do:**
 
-- SysQL is **read-only**: no mutation, deletion, or write operations against your Sysdig data.
+- SysQL is **read-only**: no mutation, deletion, or write operations.
 - Never read, write, or display credential values. Tokens come from your environment.
-
-**What I'll ask before:**
-
-- Disambiguating filter values (e.g. which `Control` you mean) when the user request matches multiple.
+- I won't discover field/entity mistakes at run time when I can catch them first: I verify them against the live schema before running.
+- I'll only ask you about a genuinely ambiguous value (when several **real** values plausibly match your intent).
 
 ## Workflow
 
-### 0. Prerequisites
+> ### 🔒 Golden rule — show before you run
+> You may **not** call `run_sysql` unless its exact query is already printed in a fenced ```sql block in your reply, immediately above that call. **Every** query, **no exceptions** — the main query *and* every count / existence / diagnostic check. If you state **any** result — a number, "0 rows", "no GCP data", "there are 18 EC2s", "0 overlap" — the query that produced it **must** appear right above it. A finding without its query is a bug. (You'd be most tempted to skip this for quick diagnostic counts — don't.)
 
-**MCP authentication preflight.** Before any other step, run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. If it tells you to abort, abort — do not call any MCP tools or perform other side effects.
+### 0. Preflight
 
-If a tool call later fails during normal operation, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md) to identify the specific failure.
+Run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow it exactly — the MCP server must be reachable for `run_sysql`/`generate_sysql`. If it says abort, abort. If a later tool call fails, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md).
 
-Do not proceed until the MCP server is reachable.
+Step 2 (live-schema validation) is the **primary** correctness check. It uses the MCP schema tools (`list_sysql_entities` to discover, `get_sysql_entity` to inspect one entity), which share the same MCP authentication as `run_sysql` — so no extra credentials are needed: if the server is reachable for queries, it's reachable for the schema. If a schema tool call fails, follow step 2's fallback.
 
-### 1. Identify entities and relationships
+### 1. Draft — internal, do not show yet
 
-Use [`references/schema.md`](references/schema.md) to find relevant entities and their fields. Each entity section lists its fields (with type and description) and the names of its public relationships. Use [`references/relationships.md`](references/relationships.md) to discover direct and indirect paths between entities that lack an obvious relationship.
+Work out the query **shape**: which entities and relationships to use. Discover them **live via MCP** — `list_sysql_entities` for the entity list, then `get_sysql_entity` for the fields + relationships of each entity you'll use. Use the language syntax in [`references/sysql_reference.md`](references/sysql_reference.md). Reuse data already in the query before traversing (e.g. `RuntimeEvent.hostName` instead of joining `Host`); always filter zones by numeric **zone ID**. Self-check it answers the question (e.g. "critical vulns" needs `severity = 'Critical'`, not a bare `MATCH Vulnerability`). Add a sensible `LIMIT` (default 50, max 1000).
 
-### 2. Check existing entities first
+This draft is **scratch — do not print it.** Never guess field or relationship names — they come from the MCP schema tools (step 2); the draft only settles which entities/relationships you'll use.
 
-Before traversing to a new entity to read a field, check whether entities **already in your query** carry the data you need. Example: `RuntimeEvent.hostName` already contains the hostname — no need to traverse to `Host`.
+Apply these **filter conventions as you write**:
+- **Names / free-text** (workload, image, package, control, CVE, username): use a case-insensitive regex match, e.g. `c.name =~ '(?i).*nginx.*'`, not `=`.
+- **Resource types**: substring/case-insensitive match, e.g. `r.type =~ '(?i).*s3.*'`.
+- **Traversal & branching — keep it minimal and adherent to the question**: traverse only the entities the question is about, via the **most direct relationship** between them. The live schema usually exposes a direct (often virtual) edge — use `EC2Instance HAS_ACCESS S3Bucket`, **don't** hand-expand it through `IAMInstanceProfile → IAMRole → …` that the question never mentioned, just to keep one `MATCH`. A single linear `MATCH` is fine for a **direct** chain; to branch from the same node, or to avoid routing through irrelevant entities, use **multiple `MATCH`** clauses that repeat the shared alias, each with an explicit relationship (`MATCH k AFFECTED_BY Vulnerability AS v` / `MATCH k GENERATES RuntimeEvent AS e`). **No** comma multi-path (`MATCH a REL b, a REL c`) and **no** Cypher-style `WITH <var>`.
+- **Negation**: `field =~ '^(?!value).*'` (SysQL has no `!~`).
+- **IPs in RETURN**: guard with `WHERE entity.publicIPs != NULL` (or `privateIPs`).
+- **Enumerations / regions**: normalise from your own knowledge — severities are `Critical`, `High`, `Medium`, `Low`, `Info`; regions are canonical cloud regions (`us1`/`virginia` → `us-east-1`, `oregon` → `us-west-2`, `frankfurt` → `eu-central-1`, …). Use single quotes for string literals.
 
-### 3. Resolve filter values
+### 2. Build the final query from the live schema (authoritative)
 
-When applying filters (`WHERE Entity.property = "foo"`), make sure the value actually exists. Common subroutines:
+The **live schema — not the static docs — decides which fields and relationships are real.** For every entity in the draft, fetch its live definition and set the query's fields/relationships from it:
 
-1. **Controls** — if the question relates to violating or accepting controls, fetch the list first:
-   ```
-   MATCH Control RETURN DISTINCT Control.name LIMIT 1000;
-   ```
-   Match the user's intent to one of the returned names. When ambiguous, present the candidates with `AskUserQuestion` and let the user pick.
+1. For each distinct entity, call **`get_sysql_entity`** (`entity_name: <EntityName>`) once — reuse the result within the session, don't re-fetch. The response is authoritative: its `fields` are the only valid field names, and its `relationships` (each with a name + target entity) the only valid traversals. (Use `list_sysql_entities` first if you're unsure an entity exists.)
+2. Make every `entity.field` and every relationship in the query a name that actually appears in these responses. Replace any guess that isn't there — e.g. `Container` has `imageReference`, **not** `image`/`imageName`; `Vulnerability` has `fixDate`, **not** `fixAvailableAt`. For a multi-hop path, fetch **each** hop's entity and chain through its real relationships.
 
-2. **Cloud resource types** — if the user names a specific resource type:
-   ```
-   MATCH CloudResource RETURN DISTINCT CloudResource.type LIMIT 1000;
-   ```
-   Match the user's intent against the result; ask for clarification when ambiguous.
+The query is final only once every field and relationship is confirmed against these live responses.
 
-3. **Kubernetes workload types** are: `Job`, `ReplicaSet`, `StatefulSet`, `Pod`, `Deployment`, `CronJob`, `DaemonSet`.
+**Fallback (degraded).** If the schema tools are unavailable (server unreachable or erroring), draft from your own knowledge of the data model and let the `run_sysql` `422` be the validator; reach for `generate_sysql` sooner. This is the only situation where a query may be shown without prior live validation.
 
-4. **Regions** — when the question involves regions, run a query first to list the available regions without filters, then answer the user's question.
+### 3. Show each query live, then run it
 
-5. **Use regex matching when in doubt**:
-   ```
-   MATCH CloudResource AFFECTED_BY Vulnerability
-   WHERE Vulnerability.packageName =~ '(?i).*glibc.*'
-   RETURN DISTINCT CloudResource, Vulnerability;
-   ```
-   ```
-   MATCH S3Bucket VIOLATES Control
-   WHERE S3Bucket.isExposed = true AND Control.name =~ '(?i).*s3.*'
-   RETURN DISTINCT S3Bucket, Control
-   LIMIT 50;
-   ```
+**Before every `run_sysql` call, print the query you're about to run** in a fenced ```sql block — the user watches each query in real time, in order, right before it executes. Then call `run_sysql`. Show **only a validated query** — one whose entities, fields and relationships you've confirmed in step 2; **never** show a draft, a guess, or an unvalidated query.
 
-6. **Always use zone IDs** when filtering by zone, not zone names. Zones are addressed by their numeric ID.
+Run as many queries as the analysis needs — discovery, the main query, **diagnostics when results are empty** ("are there any exposed EC2s at all?"), drill-downs — and show **each** one in its own block before its call.
 
-### 4. Write the query
+- **`422` parse error** (rare, since step 2 validated it) → fix it and show **only** the corrected, valid query for the re-run; don't leave an invalid query standing. Common cause: SysQL is not Cypher, so `WITH <var>` carried into a following `MATCH` is invalid — use repeated `MATCH` with a shared alias (see [`references/sysql_reference.md`](references/sysql_reference.md)). After **2** failed fixes, fall back to `generate_sysql`.
+- **0 rows** is **not** an error.
 
-Use the syntax in [`references/sysql_reference.md`](references/sysql_reference.md). Prefer composing the query yourself; fall back to the `generate_sysql` MCP tool only when the manual attempt fails 3 consecutive times with syntax errors (see [Error handling](#error-handling)).
+> Every query you display is **valid and validated**. **Never run a query the user hasn't just seen**, and **never state a finding** (a count, "there are 18…", "0 overlap") **without the query shown right above it.** This holds for the first question and every follow-up.
 
-You can enrich the query with context from earlier questions in the conversation to answer follow-ups, but keep names of Kubernetes and cloud resources intact.
+### 4. Present the analysis at the end
 
-### 5. Self-check before running
+The queries are already shown inline (step 3) — **don't re-list them.** Close with the synthesised answer: a one-line headline, then the results as a table (lead with the most important columns — severity, name, affected resource). When results are empty or partial, add a short explanation of what the data does and doesn't cover (a small table or bullets), grounded in the queries already shown above.
 
-Verify that the query actually answers the user's question before running it. If it does not, rewrite it.
-
-> Example:
-> User: "list my critical vulnerabilities"
-> Wrong: `MATCH Vulnerability RETURN Vulnerability;` (missing severity filter)
-> Right: `MATCH Vulnerability WHERE Vulnerability.severity = "Critical" RETURN Vulnerability;`
-
-### 6. Show, then run
-
-Print the final query in a fenced code block so the user can read it. SysQL is read-only, so no explicit confirmation is required — proceed straight to `run_sysql`.
-
-You can run multiple queries to answer a single user question when more detail is needed.
-
-### 7. Present results
-
-Open with a one-line headline (e.g., "7 critical vulnerabilities with known exploits") before the table.
-
-Format results as a table. Lead with the most important columns (severity, name, affected resource).
-
-**Limits and truncation.**
-
-- If no `LIMIT` is specified in the query, the server default is 50.
-- The server returns a maximum of 1000 rows per query.
-- When the result row count equals `LIMIT`, the result set is likely truncated — say so explicitly:
+**Limits and truncation.** If no `LIMIT` was set, the server default is 50; max is 1000. When the row count equals the `LIMIT`, the result is likely truncated — say so:
 
 > Showing 50 of (likely more) results. Increase `LIMIT` (max 1000) or add filters to narrow down.
 
-### 8. Suggest follow-ups
+### 5. Suggest follow-ups
 
-Suggest 3 follow-up questions at the end of the answer to help the user deep-dive, scoped to the supported areas.
+Suggest 3 in-scope follow-up questions to help the user dig deeper. When results are available, fill placeholders (e.g. `<resource-name>`) with values from the question or the results; when none are available yet, show placeholders as inline code. Keep them coherent with the question and within [Scope](#scope).
 
-- When previous results are available, fill placeholders (e.g. `<resource-name>`) with values from the user question or the query result.
-- When no results are available yet, format placeholders as inline code, e.g. `` `Resource Name` ``.
-- Suggestions must be coherent with the user question and in scope (see [Scope](#scope)).
+When the user picks a follow-up (or asks anything new), **restart from step 1** — validate against the live schema, show each validated query right before running it, and close with the analysis. Every time.
+
+## Schema tools (MCP)
+
+The live SysQL schema is fetched through the MCP server (same authentication as `run_sysql` — no extra credentials):
+
+- **`list_sysql_entities`** (optional `show_hidden`) — the list of queryable entities, for live discovery.
+- **`get_sysql_entity`** (`entity_name`, optional `show_hidden`) — one entity's real fields + relationships. The validation workhorse (step 2): call it for each entity you'll use.
 
 ## Examples
 
-### Filtered query
+### Full flow (schema-validated, query shown first)
 
-> User: "Show me critical vulnerabilities with known exploits."
+> User: "vulnerabilities with known exploits, with the date a fix became available"
 
-The skill responds with the query and then the results:
+Draft → validate with `get_sysql_entity` (`entity_name: Vulnerability`) — the response has `hasExploit`, `hasFix`, `fixDate`, `cvssScore` but **no** `fixAvailableAt`, so use `fixDate` → show the query → run via `run_sysql`:
 
 ```sql
-MATCH Vulnerability AS v
-WHERE v.severity = 'Critical' AND v.hasExploit = true
-RETURN v.name, v.cvssScore, v.epssScore
-ORDER BY v.cvssScore DESC
-LIMIT 20;
+MATCH Image AS i HAS_INSTALLED Package AS p AFFECTED_BY Vulnerability AS v
+WHERE v.hasExploit = true AND v.hasFix = true
+RETURN i.imageReference, v.name, v.severity, v.fixDate
+ORDER BY v.severity DESC
+LIMIT 50;
 ```
 
-| name | cvssScore | epssScore |
-|---|---|---|
-| CVE-2024-… | 9.8 | 0.92 |
-| … | … | … |
+Then the results table, then 3 follow-ups.
 
-### Disambiguating a filter value
+### Multi-hop, fields from the live schema
+
+> User: "list the container images running in the `prod-cluster` k8s cluster"
+
+`Container`'s fields aren't known up front, so don't guess. Call `get_sysql_entity` for `KubeWorkload` (shows a `HAS`/`RUNS` → `Container` relationship) and for `Container` (shows `imageReference`, **not** `image`/`imageName`). Build and show the validated query, then run:
+
+```sql
+MATCH KubeWorkload AS k HAS Container AS c
+WHERE k.clusterName =~ '(?i).*prod-cluster.*'
+RETURN DISTINCT c.imageReference
+LIMIT 50;
+```
+
+### Disambiguating a value (the only time a question is asked)
 
 > User: "Which workloads violate the S3 control?"
 
-The skill first fetches available controls (step 3.1), then asks via `AskUserQuestion`:
-
-> Multiple controls match "S3". Which one?
-> - `S3 Bucket Encryption Disabled`
-> - `S3 Bucket Public Read`
-> - `S3 Versioning Disabled`
-
-Once the user picks, the query is built and executed.
-
-### Aggregate, with truncation notice
-
-```sql
-# Top 5 most vulnerable workloads by vuln count
-WITH k, count(v) AS vulnCount FROM (
-  MATCH KubeWorkload AS k AFFECTED_BY Vulnerability AS v
-)
-MATCH k
-RETURN k.name, vulnCount
-ORDER BY vulnCount DESC
-LIMIT 5;
-```
-
-Showing top 5 of (likely more) results — increase `LIMIT` to widen the view.
+The control filter is a case-insensitive substring match, so no lookup is needed. Only if several **real** controls plausibly match the intent do you ask via `AskUserQuestion` before running.
 
 ### More examples
 
@@ -207,55 +170,24 @@ MATCH KubeWorkload AS k AFFECTED_BY Vulnerability AS v
 WHERE v.severity = 'Critical' AND k.namespaceName = 'production'
 RETURN k.name, k.clusterName, v.name, v.cvssScore;
 
-# AWS IAM users with admin access
-MATCH IAMUser AS u
-WHERE u.isAdmin = true
-RETURN u.name, u.arn, u.lastActiveDate;
-
-# Workloads violating compliance controls
-MATCH KubeWorkload AS k VIOLATES Control AS c
-WHERE c.severity = 'High'
-RETURN k.name, k.namespaceName, c.name, c.description;
-
-# Temporal: vulns found in the last 7 days
-MATCH Vulnerability AS v
-WHERE v.firstSeen >= daysAgo(7)
-RETURN v.name, v.severity, v.firstSeen
-ORDER BY v.firstSeen DESC;
-
-# EXISTS: workloads that have at least one critical vuln
-MATCH KubeWorkload AS k
-WHERE EXISTS { k AFFECTED_BY Vulnerability AS v WHERE v.severity = 'Critical' }
-RETURN k.name, k.namespaceName;
+# Branch from the same node: workloads with a critical vuln AND a runtime event
+MATCH KubeWorkload AS k AFFECTED_BY Vulnerability AS v WHERE v.severity = 'Critical'
+MATCH k GENERATES RuntimeEvent AS e
+RETURN DISTINCT k.name, k.namespaceName;
 ```
 
 ## Error handling
 
-Report problems with the **What happened → Why → What to do next** pattern. Common cases:
+Report problems with the **What happened → Why → What to do next** pattern.
 
-- **`run_sysql`/`generate_sysql` tools missing.**
-  - *What:* The Sysdig MCP server is not reachable.
-  - *Why:* The plugin's MCP server is not running, not registered, or the env vars `SECURE_API_TOKEN`/`SECURE_URL` are missing.
-  - *Fix:* Follow the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md). Report only the specific failing step to the user.
-
-- **Syntax error returned by `run_sysql`.**
-  - Try to fix the query locally (typo in entity/field name, missing alias, wrong relationship direction). Iterate up to **3 times**.
-  - If still failing, hand off to `generate_sysql` with a clear natural-language description of the intent. Show the regenerated query, then run it.
-
-- **Query generation fails completely (after retries and `generate_sysql`).**
-  - *What:* Be honest — say you couldn't produce a query that answers the question. Do **not** pretend you succeeded.
-  - *Why:* Briefly explain what you tried (entities, filters) and why it didn't work.
-  - *Fix:* Ask the user for more details or to clarify the request.
-
-- **Empty result set.**
-  - *What:* The query is valid but returned zero rows.
-  - *Why (likely):* misspelled filter value, filter too strict, or the data is not in the user's scope.
-  - *Fix:* Suggest one of — list available values for the filter (e.g. `RETURN DISTINCT Entity.field`); loosen the filter; or check the zone/account scope. Offer to re-run with the suggested change.
-
-- **Result hit `LIMIT`.**
-  - *What:* The number of returned rows equals the query's `LIMIT`.
-  - *Why:* The result set is likely truncated.
-  - *Fix:* Communicate the truncation explicitly and offer to raise `LIMIT` (max 1000), add `OFFSET` for pagination, or add filters to narrow the scope.
+- **`run_sysql`/`generate_sysql` tools missing.** The MCP server isn't reachable → follow the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md); report only the specific failing step.
+- **A tool call comes back _denied_.** The agent refuses a `mcp__secure-mcp-server__*` call rather than the server erroring — a **prefix mismatch**, not unreachability: the server is registered under a different prefix → apply the "denied / prefix mismatch" fix in [`references/mcp-setup.md`](references/mcp-setup.md); don't retry the denied call.
+- **Schema validation unavailable.** A schema tool (`list_sysql_entities` / `get_sysql_entity`) errors or the server is unreachable → draft from your own knowledge and let the `run_sysql` execution surface a `422` parse error, then fix from that message.
+- **Execution error / `422`.** Handled by step 3 (read the parse error → fix → re-validate → re-run, max 2, then `generate_sysql`). Surface to the user only if the fallback also fails — don't pretend it succeeded.
+- **Empty result set.** The query is valid but returned zero rows.
+  - *Why (likely):* a filter value that doesn't exist in this tenant, a too-strict filter, or data outside your scope.
+  - *Fix:* list the real values with a `RETURN DISTINCT Entity.field` query, loosen the filter, or check the zone/account scope. Offer to re-run with the change.
+- **Result hit `LIMIT`.** Communicate the likely truncation; offer to raise `LIMIT` (max 1000), paginate with `OFFSET`, or add filters.
 
 ## Scope
 
@@ -263,30 +195,11 @@ You can analyze the CSPM areas listed in [`references/cspm_questions.md`](refere
 
 ### Risks and findings
 
-We talk about **risks** for misconfigurations or risky conditions in the user's infrastructure, for example:
-
-- Exposed workloads with critical vulnerabilities
-- Publicly exposed EC2 instances with critical vulnerabilities
-- Publicly exposed S3 buckets and storage resources in general
-- Publicly exposed EC2 instances with access to S3 buckets
-- Publicly exposed Azure Data Blob
-- Publicly exposed Azure VM with critical vulnerabilities
-- Resources with failed controls
-
-We talk about **findings** when a risk is found in the user's infrastructure, for example:
-
-- Critical vulnerabilities
-- Publicly exposed resources
-- Critical/high vulnerabilities that require privilege
-- Privilege control failures
-- Vulnerabilities that have an exploit
-- Vulnerabilities in use
-- Failed controls
+We talk about **risks** for misconfigurations or risky conditions (e.g. exposed workloads with critical vulnerabilities, publicly exposed S3 buckets, resources with failed controls) and about **findings** when a risk is actually present (e.g. critical vulnerabilities, publicly exposed resources, vulnerabilities with an exploit, failed controls).
 
 ## References
 
-- [`references/schema.md`](references/schema.md) — Compact, LLM-optimised reference of entities, queries, unions, fields, and relationship names. Hidden internal entities are inlined into the public node that backs them.
-- [`references/relationships.md`](references/relationships.md) — Per-entity navigation map: every public relationship as `source --[ field : EDGE ]--> destination`, plus a flat appendix for quick lookup.
-- [`references/mcp-setup.md`](references/mcp-setup.md) — How to register the `secure-mcp-server` with each supported agent, and the diagnostic checklist when tools aren't reachable.
-- [`references/sysql_reference.md`](references/sysql_reference.md) — Complete language reference.
-- [`references/cspm_questions.md`](references/cspm_questions.md) — Catalog of supported CSPM questions and scope.
+- [`references/sysql_reference.md`](references/sysql_reference.md) — complete language reference (syntax). Entities, fields and relationships come from the live MCP schema tools (`list_sysql_entities` / `get_sysql_entity`), not from a static file.
+- [`references/cspm_questions.md`](references/cspm_questions.md) — catalog of supported CSPM questions and scope.
+- [`references/mcp-setup.md`](references/mcp-setup.md) — register the `secure-mcp-server` and the diagnostic checklist.
+- [`references/auth-preflight.md`](references/auth-preflight.md) — pre-flight to run before any MCP call.

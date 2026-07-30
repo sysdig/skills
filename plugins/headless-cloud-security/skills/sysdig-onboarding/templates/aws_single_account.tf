@@ -47,7 +47,8 @@ provider "aws" {
 # base IAM trust relationship.
 
 module "onboarding" {
-  source = "sysdiglabs/secure/aws//modules/onboarding"
+  source  = "sysdiglabs/secure/aws//modules/onboarding"
+  version = "~> 5.0"
 }
 
 # === CSPM (Cloud Security Posture Management) ===
@@ -57,6 +58,7 @@ module "onboarding" {
 
 module "config-posture" {
   source                   = "sysdiglabs/secure/aws//modules/config-posture"
+  version                  = "~> 5.0"
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 }
 
@@ -99,11 +101,20 @@ resource "sysdig_secure_cloud_auth_account_feature" "identity_entitlement_basic"
 
 module "event-bridge" {
   source                   = "sysdiglabs/secure/aws//modules/integrations/event-bridge"
+  version                  = "~> 5.0"
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 
   # Regions to monitor — add all regions where you have resources
   regions = {{EVENT_BRIDGE_REGIONS}}
   # Example: ["us-east-1", "us-west-2", "eu-west-1"]
+
+  # Optional "Select Sources" customization (AWS UI parity).
+  # For Default Setup (all sources — recommended), DELETE this whole comment
+  # block AND the placeholder line below — do not leave the {{...}} token and do
+  # not emit an empty event_pattern. When the user trims sources, replace the
+  # placeholder with an `event_pattern = <<-EOF ... EOF` block per
+  # references/log-source-customization.md (generation algorithm).
+  {{EVENT_BRIDGE_EVENT_PATTERN}}
 }
 
 resource "sysdig_secure_cloud_auth_account_feature" "threat_detection" {
@@ -131,6 +142,7 @@ provider "aws" {
 
 module "cloud-logs" {
   source                   = "sysdiglabs/secure/aws//modules/integrations/cloud-logs"
+  version                  = "~> 5.0"
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 
   bucket_arn   = "{{CLOUDTRAIL_BUCKET_ARN}}"
@@ -219,6 +231,7 @@ resource "sysdig_secure_cloud_auth_account_feature" "identity_entitlement_advanc
 
 module "agentless-scanning" {
   source                   = "sysdiglabs/secure/aws//modules/agentless-scanning"
+  version                  = "~> 5.0"
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 
   # Regions to scan — add all regions where you run workloads
@@ -235,22 +248,41 @@ resource "sysdig_secure_cloud_auth_account_feature" "agentless_scanning" {
     module.agentless-scanning.crypto_key_component_id,
   ]
   depends_on = [module.agentless-scanning]
+
+  # Host Scanning sub-options. These are feature flags (set at onboarding,
+  # toggleable later in the Sysdig UI):
+  #   SCANNING_HOST_CONTAINER_ENABLED — also scan running containers on the host
+  #   SCANNING_MALWARE_ENABLED        — malware detection (Preview)
+  flags = {{AGENTLESS_SCANNING_FLAGS}}
+  # Example: { "SCANNING_HOST_CONTAINER_ENABLED" : "true", "SCANNING_MALWARE_ENABLED" : "true" }
+
+  lifecycle {
+    ignore_changes = [flags]
+  }
 }
 
 # === END VM ===
 
 # === WORKLOAD_SCANNING (Vulnerability Management — ECS + Lambda) ===
-# Scans container images in ECS and Lambda functions for vulnerabilities.
+# Scans container images in ECS tasks and Lambda functions for vulnerabilities.
 # Uses a separate module from Agentless Scanning (which covers EC2).
+#
+# The module's base IAM role grants ECR read only — that is all ECS/Fargate
+# scanning needs. Lambda scanning additionally requires `lambda:*` read
+# permissions, which the module attaches only when lambda_scanning_enabled is
+# true. Keep the ECS / LAMBDA sub-blocks below that match the user's selection.
 
 module "vm-workload-scanning" {
   source                   = "sysdiglabs/secure/aws//modules/vm-workload-scanning"
+  version                  = "~> 5.0"
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 
-  # Enable Lambda function scanning in addition to ECS
+  # true only when Lambda scanning was selected — this is what grants the
+  # role its lambda:* read permissions. Leave false for ECS-only.
   lambda_scanning_enabled = {{LAMBDA_SCANNING_ENABLED}}  # true or false
 }
 
+# === WORKLOAD_ECS ===
 resource "sysdig_secure_cloud_auth_account_feature" "workload_scanning_containers" {
   account_id = module.onboarding.sysdig_secure_account_id
   type       = "FEATURE_SECURE_WORKLOAD_SCANNING_CONTAINERS"
@@ -258,7 +290,12 @@ resource "sysdig_secure_cloud_auth_account_feature" "workload_scanning_container
   components = [module.vm-workload-scanning.vm_workload_scanning_component_id]
   depends_on = [module.vm-workload-scanning]
 }
+# === END WORKLOAD_ECS ===
 
+# === WORKLOAD_LAMBDA ===
+# Keep this block only when lambda_scanning_enabled = true above. Enabling the
+# feature without that flag tells Sysdig to scan Lambda while the role has no
+# lambda:* permissions, and every scan fails with an access error.
 resource "sysdig_secure_cloud_auth_account_feature" "workload_scanning_functions" {
   account_id = module.onboarding.sysdig_secure_account_id
   type       = "FEATURE_SECURE_WORKLOAD_SCANNING_FUNCTIONS"
@@ -266,5 +303,6 @@ resource "sysdig_secure_cloud_auth_account_feature" "workload_scanning_functions
   components = [module.vm-workload-scanning.vm_workload_scanning_component_id]
   depends_on = [module.vm-workload-scanning]
 }
+# === END WORKLOAD_LAMBDA ===
 
 # === END WORKLOAD_SCANNING ===

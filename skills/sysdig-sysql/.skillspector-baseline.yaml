@@ -1,0 +1,190 @@
+# SkillSpector baseline for draios/bloom skills.
+#
+# Findings matched here are suppressed on future scans so only NEW / real issues
+# surface. Seeded from a manual security triage in which every entry below was read
+# in context and confirmed a false positive or an intended, documented behavior.
+#
+# Rules are glob-based (fnmatch; `**` == `*`, matches across `/`). `path` matches the
+# finding's file path relative to its skill; unset fields match anything. See
+# SkillSpector docs/SUPPRESSION.md.
+#
+# Scope: the static pass is the CI gate (--fail-on-new counts static findings only);
+# the per-skill LLM pass is advisory. Rules below zero the static gate and suppress
+# the triaged, accepted LLM findings we understand.
+#
+# DELIBERATELY NOT SUPPRESSED — kept visible on purpose:
+#   - SQP-2 (sensitive-data exposure) is NEVER blanket-suppressed on *SKILL.md.
+#     Doing so would hide a genuine secret-leak regression. The one real SQP-2
+#     (sysdig-api scripts/lib.py printed the token prefix to stderr) was FIXED at
+#     source (2026-07-16), not baselined. If SQP-2 fires on a SKILL.md, read it.
+#
+# RESOLVED by #184 (no longer fire / reclassified — see 2026-07-16 re-scan):
+#   - LP3  sysdig-api/SKILL.md : `allowed-tools` now declared → gone.
+#   - TM1  sysdig-api/SKILL.md : mutating caller now disclosed in the description
+#                                and gated behind per-call confirmation → the
+#                                remaining hit on the batch-DELETE *example* is the
+#                                documented, gated pattern (suppressed below).
+# When a real item is fixed, it simply stops firing — do not add it here.
+#
+# To extend: add a rule with a clear `reason`. Regenerate machine fingerprints with
+# `skillspector baseline <skill> --no-llm` only if you need exact-line pinning
+# (fingerprints are brittle to edits; prefer rules).
+version: 1
+
+rules:
+  # --- Documentation false positives -----------------------------------------
+  - id: "AS1"
+    path: "*mcp-setup.md"
+    reason: "FP: setup docs describe `claude mcp add` (references .claude/); not code accessing agent config."
+  - id: "AS1"
+    path: "*permissions.md"
+    reason: "FP: docs listing where users place allowed-tools patterns; not config access."
+  - id: "AS1"
+    path: "*permission-patterns.md"
+    reason: "FP: the allowed-tools/settings.json command catalog (split out of permissions.md); documents where users add patterns, not code accessing agent config."
+  - id: "P2"
+    path: "*references/aws.md"
+    reason: "FP: literal <!-- TODO --> placeholders in unfinished docs, no directives."
+  - id: "P2"
+    path: "*references/azure.md"
+    reason: "FP: <!-- TODO --> placeholder."
+  - id: "P2"
+    path: "*references/gcp.md"
+    reason: "FP: <!-- TODO --> placeholder."
+  - id: "P2"
+    path: "*SKILL.md"
+    reason: "FP: PR-description template authoring comment (e.g. remediate SKILL.md), not hidden instructions."
+  - id: "P2"
+    path: "*references/ticketing.md"
+    reason: "FP: literal ticket-body template (PR/ticket-only variants with <pr_url>/<package> placeholders and HTML authoring comments); human-readable ticket scaffolding the skill writes into Jira/GitHub, not hidden directives to the agent."
+
+  # --- Documented state mechanism (Sysdig MCP get/save/delete_skill_state) -----
+  - id: "MP3"
+    reason: "By-design: the documented get_skill_state/save_skill_state/delete_skill_state MCP mechanism, not attacker-writable memory."
+  - id: "RA2"
+    path: "*SKILL.md"
+    reason: "FP: matches the allowed-tools manifest / skill description, not a cron/startup persistence mechanism."
+
+  # --- Confirmation gates verified present -------------------------------------
+  - id: "EA2"
+    path: "*SKILL.md"
+    reason: "FP: every hit sits inside a verified human-approval gate (e.g. onboarding 'Human approves destructive operations'; runtime-remediate 'every destructive action gets its own explicit yes'). Revisit if a new skill adds ungated destructive actions."
+
+  # --- Anti-refusal phrasing, scoped / benign ----------------------------------
+  - id: "AR1"
+    path: "*SKILL.md"
+    reason: "FP: onboarding 'never refuse to proceed' is scoped to tool choice, followed by hard secret + destructive-op guardrails."
+  - id: "AR2"
+    path: "*SKILL.md"
+    reason: "FP: investigate 'do not warn unless asked' refers to a benign UI behavior (a job not shown in a Plan view), not safety suppression."
+
+  # --- System-prompt-leakage FP ------------------------------------------------
+  - id: "P6"
+    path: "*SKILL.md"
+    reason: "FP: 'Internal IDs display rule' is an output-formatting reference; nothing exposes system prompts."
+
+  # --- Credential auto-discovery / declared endpoints (intended) ---------------
+  - id: "E2"
+    reason: "By-design: documented credential auto-discovery; reads only SYSDIG* vars, used as a Bearer header to the Sysdig host, never logged/exfiltrated."
+  - id: "E1"
+    path: "*scripts/check_permissions.sh"
+    reason: "FP: the GCP permission pre-flight POSTs to Cloud Resource Manager `:testIamPermissions`, a read-only check that reports which of a supplied permission list the caller effectively holds (gcloud exposes no `projects test-iam-permissions` subcommand, so the REST API is the only route). Nothing is created or changed, and the access token is passed via -K on a pipe rather than on the command line."
+  - id: "E1"
+    path: "*agents/openai.yaml"
+    reason: "By-design: declares the GitHub MCP server endpoint for non-Claude agents; documented dependency."
+
+  # --- Privilege / threat-detection docs and privileged Sysdig host agent ------
+  - id: "PE2"
+    reason: "By-design/FP: chmod 600 hardens the token file; validate_prereqs.sh only warns that agent install may need sudo (does not elevate)."
+  - id: "PE3"
+    reason: "FP: 'Check kubeconfig' warning string; and MITRE ATT&CK detection taxonomy (/etc/shadow, keychain) describing what to detect."
+  - id: "PE4"
+    path: "*templates/host-shield.yaml"
+    reason: "By-design: `system.runtimes.docker[].socket: unix:///var/run/docker.sock` (and the podman equivalent) is how the host agent enumerates local containers for container posture and vulnerability scanning. Both entries are `mandatory: false`, so the agent starts without them. Same behavior already accepted for host-shield.md below, which documents it."
+  - id: "PE4"
+    path: "*host-shield.md"
+    reason: "By-design: Sysdig host agent docker run (docker.sock, --privileged) — required for host monitoring, matches official deployment docs."
+  - id: "PE4"
+    path: "*generate-config.md"
+    reason: "By-design: the Linux-host generation branch tells the agent to mount the Docker socket at the container-internal `/var/run/docker.sock` for the Docker install method. Same accepted behavior as the host-shield.md entry above (this is where the install command is assembled); mounting it elsewhere makes the container-scanning component exit fatally and crash-loops the agent."
+  - id: "PE4"
+    path: "*known-issues.md"
+    reason: "FP: `/var/run/docker.sock` appears in the symptom/cause text of a documented issue (a socket mounted at the wrong path crash-loops the agent). Prose describing a misconfiguration, nothing executed."
+  - id: "PE5"
+    path: "*host-shield.md"
+    reason: "By-design: `-v /:/host:ro` + `-v /dev:/host/dev` on the Docker install method. The posture analyzer chroots into the host filesystem, so without the host root mounted every host benchmark check silently degrades (`chroot: failed to run command 'sh'`). Mounted **read-only**, and only when the user selected host posture or host vulnerability management — the mount set is a function of the chosen capabilities. Same host-visibility model as the already-accepted `--privileged` / `/proc` mounts in the same file."
+  - id: "PE5"
+    path: "*generate-config.md"
+    reason: "By-design: same read-only host-root mount as the host-shield.md PE5 entry above, stated in the generation branch that assembles the Docker install command."
+  - id: "PE5"
+    path: "*threat-patterns.md"
+    reason: "FP: nsenter etc. appear in a Falco detection-pattern description, not executed by the skill."
+  - id: "TM4"
+    path: "*shield-values.yaml"
+    reason: "By-design: Sysdig host-shield privileged workload; documents `false` for GKE Autopilot."
+  - id: "SSRF1"
+    reason: "FP: IMDS 169.254.169.254 / metadata.google.internal appear in diagrams/prose describing the attack the skill investigates; no request is issued."
+  - id: "SC2"
+    path: "*activity-audit.md"
+    reason: "FP: 'curl -sL http://.../x.sh | bash' is sample audit-timeline data an analyst triages, not executed."
+  - id: "TM1"
+    path: "*scripts/validate_prereqs.sh"
+    reason: "FP: `curl -sf --connect-timeout 5 -o /dev/null https://sysdig.com` is a bare outbound-HTTPS reachability probe run before the Sysdig region is known. No credential, no mutating verb, response discarded."
+  - id: "TM1"
+    path: "*response-actions-catalog.md"
+    reason: "FP: documents the DELETE undo endpoint (reverses a response action); legitimate REST verb doc."
+  - id: "TM1"
+    path: "*offboarding.md"
+    reason: "By-design: the offboarding guide documents removal steps (`terraform state rm` as a last-resort recovery, and for a Linux host `rm -rf /opt/draios` / `/opt/sysdig`). The host cleanup is REQUIRED, not incidental: package removal leaves `dragent.yaml` on disk with the Agent Access Key in it, so skipping it ends offboarding with a live tenant credential on the host. Both paths are user-initiated and confirmed — the destroy/removal commands are Tier 2 in references/permission-patterns.md and never auto-allowed."
+  - id: "TM1"
+    path: "*permission-patterns.md"
+    reason: "By-design: this file IS the permission catalog — it enumerates every command the skill can run, explicitly labelling `rm -rf /opt/draios` / `/opt/sysdig`, `apt-get purge` and `terraform destroy` as DESTRUCTIVE / Tier 2 so they are kept out of the auto-allow list. The paths are fixed, agent-owned directories (never a user path or a variable), and the table exists to force a manual confirmation prompt."
+  - id: "TM1"
+    path: "*scripts/detect-region.sh"
+    reason: "FP: the curl uses -K <(printf 'header = \"Authorization: Bearer ...\"') to pass the token via a config file on a pipe — this is the hardening that keeps the token OUT of argv/process listing (opposite of the token-on-command-line pattern TM1 flags). No mutating HTTP verb; the request is a read-only GET to /api/users/me for region detection."
+  - id: "TM1"
+    path: "*scripts/verify-cloud-status.sh"
+    reason: "FP: same -K-config token hardening as detect-region.sh (token off argv). The call is a read-only GET to /api/cloudauth/v1/accounts; no mutating verb."
+  - id: "TM1"
+    path: "*scripts/check_permissions.sh"
+    reason: "FP: the third and last -K-config call site (token off argv, same hardening as detect-region.sh / verify-cloud-status.sh). TM1 fires here on the `-X POST` verb, but the endpoint is Cloud Resource Manager `:testIamPermissions`, which is read-only by contract — POST is only how that API accepts its permission list in the body. It creates, modifies and deletes nothing. This entry appeared when the call was hardened to -K; before that it was E1 instead."
+  - id: "TM1"
+    path: "*SKILL.md"
+    reason: "By-design (resolved by #184): sysdig-api's SKILL.md documents the generic sysdig_api_call caller incl. a batch-DELETE example. The description now discloses the mutating (POST/PUT/PATCH/DELETE) capability and every destructive call is gated behind explicit per-call user confirmation (see the batch-DELETE 'confirm the FULL id list with the user' note). Only sysdig-api fires TM1 on SKILL.md today; revisit if a new skill adds an ungated destructive tool pattern."
+  - id: "LP1"
+    path: "*detect-region.sh"
+    reason: "FP: Bash capability IS declared in onboarding allowed-tools (incl. Bash(*detect-region*))."
+  - id: "LP1"
+    path: "*scripts/check_permissions.sh"
+    reason: "FP: Bash capability IS declared in onboarding allowed-tools (Bash(*scripts/check_permissions.sh *) in SKILL.md). Same class as the detect-region.sh LP1 above — the heuristic cannot map a shell script to its declared grant."
+  - id: "LP1"
+    path: "*scripts/lib.py"
+    reason: "By-design: sysdig-api credential auto-discovery reads only SYSDIG* env vars via os.environ (documented pattern; Bash(env*) is in allowed-tools). SkillSpector's LP1 heuristic can't map a Python os.environ read to the declared grant. Same class as the detect-region.sh LP1 above. (The token value is never printed — fixed 2026-07-16.)"
+
+  # --- Third-party enrichment egress (LLM pass; runtime-investigate) -----------
+  # Accepted: #184 added a Phase-0 data-egress notice + user veto before ANY
+  # external call (SKILL.md "Data-egress notice" — discloses exactly which IOCs
+  # leave the environment and to which service, and lets the user decline). That
+  # runtime veto is a stronger control than a static description string.
+  # Scoped by unique filename so it does NOT blanket-suppress SQP-2 elsewhere.
+  - id: "SQP-2"
+    path: "*enrichment-binary.md"
+    reason: "By-design: VirusTotal SHA256 lookup for binary IOCs; gated behind the Phase-0 egress veto and skipped when no VT API key is present. Only the hash + the user's own VT key leave the environment."
+  - id: "SQP-2"
+    path: "*enrichment-network.md"
+    reason: "By-design: GeoIP lookup sends only public (non-RFC1918/link-local/loopback/CGNAT) IPs to ipinfo.io/ip-api.com; gated behind the Phase-0 egress veto. Internal topology is never sent."
+
+  # --- Optional supply-chain hardening (mirror upstream install docs) ----------
+  - id: "RP1"
+    path: "*host-shield.md"
+    reason: "Optional hardening: unpinned Sysdig agent image mirrors the official install command. Pin if desired."
+  - id: "RP1"
+    path: "*integrations.md"
+    reason: "Optional hardening: unpinned npx MCP servers mirror upstream install docs. Pin if desired."
+
+  # --- Internal dev artifacts (never shipped; belt-and-suspenders) -------------
+  - id: "*"
+    path: "*.dev/*"
+    reason: "Internal-only: .dev/ is stripped at promotion and excluded from the shipped-only scan; suppressed in case a full-tree scan is ever run."
+
+fingerprints: []

@@ -53,8 +53,10 @@ different blast radius from a 3-replica frontend behind a public Ingress.
 - Which ServiceAccount does it run as? What RBAC does that SA have? Is
   there a Role that the threat could have already exploited (e.g., create
   pods, exec into pods, read secrets cluster-wide)?
-- For IRSA / Workload Identity setups: what IAM role does the SA assume?
-  Has that role been used recently (CloudTrail)?
+- For IRSA (AWS) / Workload Identity (GCP) / Workload Identity (Azure)
+  setups: what cloud role/identity does the SA assume? Has it been used
+  recently (cloud audit log — CloudTrail / GCP Audit / Azure Activity, or
+  the `FETCH_CLOUD_LOGS` CLOUD responder action)?
 - Are there CRDs (SecretProviderClass, ExternalSecret, VaultStaticSecret)
   that bind it to external state?
 - Is it part of a service mesh? Istio / linkerd sidecars need their

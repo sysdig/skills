@@ -5,7 +5,9 @@ description: >
   end-to-end. Surfaces the highest-priority threat, scores vulnerability
   vs runtime correlations on a 1-5 confidence scale, deep-dives into
   network blast radius or suspicious-binary VirusTotal lookups depending
-  on the event class, and hands the case off to Jira or PagerDuty.
+  on the event class, reconstructs the affected workload's activity audit
+  trail (commands, connections, file accesses) as a timeline around the
+  detection, and hands the case off to Jira or PagerDuty.
   Triggers on: "investigate runtime threat", "what is this Falco alert",
   "triage this SOC alert", "analyze runtime incident". Not for
   vulnerability prioritization (use `sysdig-investigate`) or remediation
@@ -20,24 +22,30 @@ allowed-tools:
   - Bash(env*)
   - Bash(curl *ipinfo.io*)
   - Bash(curl *ip-api.com*)
+  - Bash(curl *virustotal.com*)
   - Bash(curl *events.pagerduty.com*)
   - mcp__secure-mcp-server__get_skill_state
   - mcp__secure-mcp-server__save_skill_state
+  - mcp__secure-mcp-server__delete_skill_state
   - mcp__secure-mcp-server__list_runtime_events
   - mcp__secure-mcp-server__count_runtime_events
   - mcp__secure-mcp-server__discover_runtime_event_field_values
   - mcp__secure-mcp-server__get_event_info
   - mcp__secure-mcp-server__get_event_process_tree
+  - mcp__secure-mcp-server__list_activity_audit_events
+  - mcp__secure-mcp-server__get_activity_audit_event
+  - mcp__secure-mcp-server__trace_activity_audit_command
   - mcp__secure-mcp-server__list_threats_engine_groups
   - mcp__secure-mcp-server__get_threats_engine_group
   - mcp__secure-mcp-server__get_threats_engine_threat
   - mcp__secure-mcp-server__list_threats_engine_threats_by_group
   - mcp__secure-mcp-server__list_threats_engine_resources_by_group
   - mcp__secure-mcp-server__run_sysql
-  - mcp__secure-mcp-server__list_vulnerability_findings_by_image
+  - mcp__secure-mcp-server__query_vulnerability_findings
   - mcp__secure-mcp-server__list_runtime_scan_results
   - mcp__secure-mcp-server__get_scan_result
   - mcp__secure-mcp-server__fetch_threat_intelligence_feed
+version: 1.0.1
 ---
 
 ## First-run notice (Public Beta)
@@ -179,7 +187,11 @@ Preflight   Surface     Investigate    Synthesise + report
 
    - `Connectivity: Sysdig MCP ✓ · Jira ✓ · PagerDuty — · VirusTotal —. Will skip binary VT enrichment and PagerDuty handoff.`
 
-   This is the only narration during Phase 0 — the per-step results above are recorded silently on the case object. Don't prompt; just inform.
+   **Data-egress notice.** Immediately after the connectivity line, when any third-party enrichment is reachable, disclose in one line what indicators will leave the environment and to which service — so the user can veto before any external call:
+
+   - `Enrichment will send: binary SHA256 hashes → VirusTotal · public (non-private) IPs → ipinfo.io (fallback ip-api.com) · CVE IDs → NVD/CISA KEV/Exploit-DB/GHSA. Private/internal IPs (RFC1918, link-local, loopback, CGNAT) are never sent. No Sysdig event contents, hostnames, or Sysdig credentials leave the environment — the VirusTotal call carries only the hash plus your VirusTotal API key.`
+
+   Only list the destinations that are actually reachable (`✓`). If the user declines, skip the corresponding enrichment and record it as `skipped: user declined egress`. This is the only narration during Phase 0 — the per-step results above are recorded silently on the case object. Don't prompt beyond the egress veto; just inform.
 
 3. **Entry-point detection.** Parse the invocation argument:
    - No argument → `interactive` mode.
@@ -245,17 +257,41 @@ Tell the user what you're doing as you go. Examples of good status updates:
 
 These are the ingredients. The order is yours.
 
+**Time scoping — read before any event query.** `list_runtime_events`, `count_runtime_events`, and `discover_runtime_event_field_values` accept only `scope_hours` — a window counted *back from now*. There is no absolute start/end, and `filter_expr` has no timestamp field. So a "±2h around the trigger" or "last 7 days" window is **not** something `scope_hours` gives you when the trigger isn't recent: set `scope_hours` wide enough to reach past the trigger (`scope_hours ≈ hours_since_trigger + 2`), then **post-filter the returned events by their timestamp** down to the band you actually want. Treat every "±2h" / "7-day" phrasing below as the *target band after client-side filtering*, not a parameter you can pass directly.
+
 - **Tenant-wide critical sweep (sanity check)** — once early in Phase 2, call `mcp__secure-mcp-server__list_runtime_events` with `filter_expr = "severity in (0,1,2,3)"` and *no scope filter* across the ±2h window around the trigger. Catches cross-domain signals the cluster/account-filtered queries miss (GitHub `cloudProvider.account.id`, Okta `cloudProvider.tenantId`, anything without K8s labels). Fold in any hit whose image-org, repo name, or actor matches the trigger.
 - **Process tree** of the trigger event — `mcp__secure-mcp-server__get_event_process_tree`. Almost always the highest-yield single artifact. Falls back to `aiGeneratedDescription` parsing if the MCP returns empty.
+- **Activity audit trail** of the affected workload — the agent-captured record of every command, network connection, and file access around the trigger, independent of whether each tripped a rule. This is what a human analyst pulls in the Secure UI to answer *"what else did this workload do around the detection?"* — dwell time, lateral-movement setup, dropped files, C2 callbacks. Use the MCP tool `list_activity_audit_events` scoped to the **container / pod / workload** (never the bare host) and centred on the trigger time. **Unlike `list_runtime_events`, the activity audit tools take a real absolute window (`from`/`to` as ISO-8601, epoch, or a relative offset like `2h`/`7d`, max 2 weeks)** — so a "±2h around the trigger" band is a direct parameter, *not* the `scope_hours` post-filter workaround. For a suspicious command (dropper, reverse shell, miner), pass its entry id to `trace_activity_audit_command` to reconstruct the child processes, connections, and files it spawned in the same session — the audit-trail counterpart to the process tree. See [`references/activity-audit.md`](references/activity-audit.md) for tools, filter fields, scoping, and the timeline output shape. The trail feeds the "Activity audit timeline" report section and cross-references into the network/binary IOC enrichment.
 - **Prior events on the affected resource** — last 7 days, via `mcp__secure-mcp-server__list_runtime_events` with a `filter_expr` matching the workload (`kubernetes.cluster.name + namespace + workload`) or host (`host.hostName`). For K8s workloads, also pull host-level events on the same node — escapes hide there.
-- **Cluster-wide activity in a ±2h window** around the trigger. Same MCP tool, three filters in parallel:
+- **Cluster-wide activity in a ±2h window** around the trigger. Same MCP tool, three filters in parallel. **The `source` values are tenant/region/backend-specific — confirm the real ones with `mcp__secure-mcp-server__discover_runtime_event_field_values` on the `source` field before filtering, rather than assuming a literal.** Known values at the time of writing: `syscall`, `k8s_audit`, `awscloudtrail` + `awscloudtrail_stateful` (AWS — note there is **no** bare `cloudtrail` value), `azure_platformlogs` + `azure_entra` (Azure), `gcp_auditlog` (GCP). If a `source` filter comes back empty, re-run discover (its `suggested` bucket lists what's actually firing, `other` lists what the tenant knows) and widen to the values it reports.
   - `kubernetes.cluster.name = "<cluster>" and source = "syscall"` (other resources in the cluster)
   - `kubernetes.cluster.name = "<cluster>" and source = "k8s_audit"` (Attach/Exec Pod, Deployment Created, etc.)
-  - `kubernetes.cluster.name = "<cluster>" and source = "cloudtrail"` (cluster-tagged cloud events, if any)
-- **Cloud-account-wide activity** when the resource has `aws.accountId` / `azure.subscriptionId` / `gcp.projectId`. CloudTrail / agentless-aws-ml / agentless-okta-ml events live under the *account* dimension, not the cluster. **This is the difference between catching multi-stage cross-cloud attacks (IMDS credential theft → IAM access-key creation → CloudTrail tampering → S3 exfiltration) and missing them.** Filter: `aws.accountId = "<account>" and source in ("cloudtrail", "agentless-aws-ml")`.
+  - `kubernetes.cluster.name = "<cluster>" and source in ("awscloudtrail", "awscloudtrail_stateful")` (cluster-tagged cloud events, if any — swap in the Azure/GCP source values from discover when the cluster runs there)
+- **Cloud-account-wide activity** when the resource has `aws.accountId` / `azure.subscriptionId` / `gcp.projectId`. Cloud audit-log and agentless-ML events live under the *account* dimension, not the cluster. **This is the difference between catching multi-stage cross-cloud attacks (IMDS credential theft → IAM access-key creation → audit-log tampering → storage exfiltration) and missing them.** Filter by the matching dimension and that cloud's source values (verify with discover first):
+  - AWS — `aws.accountId = "<account>" and source in ("awscloudtrail", "awscloudtrail_stateful", "agentless-aws-ml")`
+  - Azure — `azure.subscriptionId = "<subscription>" and source in ("azure_platformlogs", "azure_entra")`
+  - GCP — `gcp.projectId = "<project>" and source in ("gcp_auditlog")`
 - **Other threat groups in this incident** — fold them into the same case — do not investigate separately. Other threat groups already tagged in Phase 1 as part of this incident — pull their constituent events via `mcp__secure-mcp-server__list_threats_engine_threats_by_group` and their affected resources via `mcp__secure-mcp-server__list_threats_engine_resources_by_group` (both keyed by the group ID) to merge into the chain. If new groups appear in the cluster window during Phase 2 investigation, fold them in too. Cross-type is allowed: a CLOUD threat may be the same incident as a K8S_WORKLOAD threat.
 - **Sibling resources / posture / RBAC (role-based access control)** via `mcp__secure-mcp-server__run_sysql`. SysQL schema differs between tenants — adjust query shape if rejected. Example queries: `MATCH KubeWorkload AS wl WHERE wl.cluster = '<c>' RETURN wl.namespace, wl.name`, `MATCH Resource VIOLATES Control`, `MATCH KubeServiceAccount HAS KubeRoleBinding HAS KubeClusterRole`.
-- **Vulnerability surface** — start with `mcp__secure-mcp-server__list_vulnerability_findings_by_image` using the image digest from the threat detail (server-side filtering by severity / exploit / fix). For running/in-use package detail — which vulnerable packages are actually loaded on the workload or host — use `mcp__secure-mcp-server__list_runtime_scan_results` (filter by `kubernetes.cluster.name`/`namespace`/`workload` or `host.hostName`, sort `runningVulnTotalBySeverity`) and pass the returned `resultId` to `mcp__secure-mcp-server__get_scan_result` for the full packages + vulnerabilities breakdown.
+- **Vulnerability surface** — start with `mcp__secure-mcp-server__query_vulnerability_findings` scoped to the running image, filtered to the notable CVEs:
+
+  ```json
+  {
+    "group_by": "cve",
+    "filters": [
+      { "field": "imageId", "op": "eq", "value": "<running image's config digest>" },
+      { "field": "severity", "op": "in", "value": ["critical", "high"] },
+      { "field": "hasFix", "op": "eq", "value": true },
+      { "field": "hasExploit", "op": "eq", "value": true }
+    ]
+  }
+  ```
+
+  **Scope by the right identifier.** `imageId` expects the image **config digest** — the `sha256:…` that runtime detection resolves the running container to (the threat detail's image id; equivalently `metadata.imageId` from `get_scan_result` in the scan-result step below). This is a *different* sha256 from the registry **manifest** digest (findingsapi field `imageDigest`, `metadata.digest`) — cross them and the query returns zero rows with no error. If you only have the pullstring, use `imageReference` (e.g. `…/app:1.0.0`) instead, accepting that a mutable tag may span builds.
+
+  **Filtering.** The tool applies **no** default filters, so set the triage filters explicitly: severity critical/high, `hasFix` true, `hasExploit` true. That narrows to the actionable, weaponized CVEs the MITRE-tactic gate and CTI step below consume. If the result comes back empty, widen by dropping `hasExploit`, then `hasFix`, before concluding the image is clean.
+
+  `group_by: "cve"` returns one deduplicated row per CVE, ranked by the grouping's default risk order. Read rows from the response's `data` array; `meta.hasMore` + the `cursor` token page further, and `severity` comes back capitalized (`Critical`) in responses even though the filter value is lowercase. For running/in-use package detail — which vulnerable packages are actually loaded on the workload or host — use `mcp__secure-mcp-server__list_runtime_scan_results` (filter by `kubernetes.cluster.name`/`namespace`/`workload` or `host.hostName`, sort `runningVulnTotalBySeverity`) and pass the returned `resultId` to `mcp__secure-mcp-server__get_scan_result` for the full packages + vulnerabilities breakdown.
 - **External CTI** for the top 5 critical/high CVEs that pass the MITRE-tactic gate (see `references/correlation-guide.md`): NVD, CISA KEV (Known Exploited Vulnerabilities), Exploit-DB, GHSA (GitHub Security Advisory) via `WebFetch`. Don't fetch CTI for tactic-mismatched CVEs.
 - **Sysdig threat-intel feed** via `mcp__secure-mcp-server__fetch_threat_intelligence_feed` — Sysdig-curated CVEs / zero-days / active-attack notes. Cross-reference any IOCs you collect.
 - **VirusTotal (VT)** for binary IOCs when a SHA256 surfaces on event fields and a VT key is present (Phase 0 records the env var). When the threat lacks `proc.sha256`, look across other events on the same container — drift detection events typically carry the hash.
@@ -274,6 +310,7 @@ Read `references/correlation-guide.md` for the MITRE-tactic gate and 1–5 scori
 You're done when:
 - The chain has a coherent narrative (initial access → execution → … → impact, or bounded by available data), AND
 - You've followed every watchlist hit at least one hop, AND
+- You've pulled the activity audit trail for the affected container/pod/workload around the trigger (or recorded why it was unavailable) — the timeline is part of the deliverable, AND
 - You've asked yourself *"is there another threat group within the cluster + ±2h / account + ±2h window that belongs to this same incident?"* — and either folded it in or recorded why not.
 
 If you find yourself making more than ~4 follow-on calls per signal, stop and synthesise. Diminishing returns.
@@ -353,14 +390,17 @@ Truncation, skipped enrichments, and other partial-success cases must be flagged
 | Situation | Behavior |
 |-----------|----------|
 | Sysdig MCP preflight returns State 2 or State 3 | Abort in Phase 0a per `auth-preflight.md` — emit its verbatim message and stop. No data calls, no state read, no file writes. |
+| An MCP tool call comes back **denied** (the agent refuses the call rather than the server erroring) | Not an auth or reachability failure — the tool isn't on the agent's allowlist, usually a **prefix mismatch**. `allowed-tools` lists the canonical `mcp__secure-mcp-server__*` names (per `mcp-setup.md`), but the server may be registered under a different prefix in this agent (e.g. a plugin-managed name). The bare tool names match 1:1; only the prefix differs. Tell the user: confirm the registered name with `claude mcp list`, then either re-register it as `secure-mcp-server` (the mandated name — see `mcp-setup.md`) or add the actual `mcp__<prefix>__*` pattern to the agent's permitted tools, and re-run. Do not loop retrying the denied call. |
 | Trigger ID resolves to neither a threat nor a group (`get_threats_engine_threat`, `get_threats_engine_group`, and `list_threats_engine_threats_by_group` all 404) | Fall back to `mcp__secure-mcp-server__get_event_info` with the same ID. If that 404s too, tell the user the ID wasn't found and offer interactive mode. |
 | No qualifying threats / events found in Phase 1 | Tell the user, offer to widen the time window. |
-| Vulnerability lookup empty | When `mcp__secure-mcp-server__list_vulnerability_findings_by_image` returns no findings, try `mcp__secure-mcp-server__list_runtime_scan_results` (filter by workload/host) then `mcp__secure-mcp-server__get_scan_result`. If still nothing, record `{ "vulnerabilities": { "status": "skipped", "reason": "no scan data" } }` and continue. |
+| Vulnerability lookup empty | When `mcp__secure-mcp-server__query_vulnerability_findings` returns an empty `data` array, widen by relaxing filters (drop `hasExploit`, then `hasFix`, then severity) before concluding the image is clean. If still empty, try `mcp__secure-mcp-server__list_runtime_scan_results` (filter by workload/host) then `mcp__secure-mcp-server__get_scan_result`. If still nothing, record `{ "vulnerabilities": { "status": "skipped", "reason": "no scan data" } }` and continue. |
 | `WebFetch` to a public CTI source fails or rate-limits | Mark that source `{ "status": "failed", "reason": "<rate-limited \| network \| 4xx>" }` and continue. Don't retry in a loop. |
 | VirusTotal API key not detected | Record `{ "vt": { "status": "skipped", "reason": "no API key" } }`. |
 | No Jira and no PagerDuty detected | Ask whether the user wants to configure one or just show the file path. |
 | Atlassian MCP / PagerDuty curl errors during handoff | Record `{ "handoff": { "status": "failed", "reason": "<error>" } }`, surface the error, print the file path, offer to retry or switch destination. |
+| Activity audit trail empty or capture not enabled | `list_activity_audit_events` returns no entries for the scoped container/pod/workload. Not a failure — the agent's command/connection/file capture may be off, or the workload was genuinely quiet. Record `{ "activity_audit": { "status": "skipped", "reason": "no activity audit data for this scope" } }` and flag in the summary that audit context was unavailable. |
+| Activity audit window exceeds 2 weeks | `from`/`to` span is capped at 2 weeks server-side. Narrow the window (centre tighter on the trigger) and re-issue. |
 | `mcp__secure-mcp-server__list_runtime_events` cursor pagination drops `filter_expr` | Known MCP quirk — paginating with `cursor` returns events from the wrong scope. Don't paginate; widen `scope_hours` and re-issue with the original filter. |
 | A list_runtime_events call returns >100 events | Tighten the time window or split the filter. Never silently drop the section — record `{ "status": "done", "truncated": true, "shown": <n>, "total": <m> }`. |
-| CloudTrail integration not present in tenant | Cloud-account sweep returns empty. Record `{ "cloudtrail": { "status": "skipped", "reason": "no integration in tenant" } }` on the case; flag in the summary that S3 / IAM / IMDS cloud-API signals were unavailable. |
+| Cloud audit-log integration (CloudTrail / GCP Audit / Azure Activity) not present in tenant | Cloud-account sweep returns empty (no `source` values for that provider — confirm with discover). Record `{ "cloudtrail": { "status": "skipped", "reason": "no integration in tenant" } }` on the case; flag in the summary that cloud-API signals (storage / IAM / IMDS) were unavailable. |
 | SysQL schema rejects a query | Try the alternate relation shapes (`HAS` vs `BINDS_TO`, etc.). If all fail, record `{ "status": "failed", "reason": "schema mismatch" }` and continue. The skill should not block on schema mismatches. |

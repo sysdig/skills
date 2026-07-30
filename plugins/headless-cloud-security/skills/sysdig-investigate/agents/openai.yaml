@@ -2,14 +2,7 @@ dependencies:
   # The Sysdig MCP server (secure-mcp-server) is intentionally not declared
   # here: it is a hosted, multi-region OAuth server with no static URL —
   # users register it themselves per references/mcp-setup.md.
-  tools:
-    - type: "mcp"
-      value: "jira-mcp-server"
-      description: "Jira/Atlassian MCP server — provides ticket search, creation, and updates. Optional — only used if the user opts in to ticket creation in step 5b."
-      transport: "stdio"
-      command: "npx"
-      args: ["-y", "--package=mcp-atlassian", "--package=jsdom", "mcp-atlassian"]
-      env:
-        ATLASSIAN_API_TOKEN: "${JIRA_API_TOKEN}"
-        ATLASSIAN_BASE_URL: "${JIRA_BASE_URL}"
-        ATLASSIAN_EMAIL: "${JIRA_USER_EMAIL}"
+  #
+  # No other MCP dependencies: this skill is investigation-only. Ticket and
+  # PR creation (and their integrations) live in /sysdig-remediate.
+  tools: []

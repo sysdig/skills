@@ -17,6 +17,7 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+  - Bash(command -v*)
   - Bash(kubectl get*)
   - Bash(kubectl describe*)
   - Bash(kubectl logs*)
@@ -53,6 +54,7 @@ allowed-tools:
   - mcp__secure-mcp-server__get_capture_storage
   - mcp__atlassian__getVisibleJiraProjects
   - mcp__atlassian__createJiraIssue
+version: 1.0.1
 ---
 
 ## First-run notice (Public Beta)
@@ -131,7 +133,7 @@ Goal: load the threat into memory along with an explicit **inventory** of what's
    Known:
      - event.id, threat type, MITRE tactic
      - cluster, namespace, workload kind/name, container id, process tree
-     - AWS account (if surfaced), correlated CVEs
+     - cloud account / identity (AWS / GCP / Azure, if surfaced), correlated CVEs
      - prior investigation handoff (Jira/PagerDuty ticket, if any)
    Gaps:
      - <e.g.> ServiceAccount and RBAC not yet enumerated
@@ -145,7 +147,7 @@ Goal: produce the mini-map described in [`references/consequence-analysis-guide.
 
 1. **SysQL first.** Run the queries in [`references/architecture-probing.md`](references/architecture-probing.md) under the "Sysdig MCP — SysQL recipes" section. Workload identity, Service/Ingress map, ServiceAccount + RBAC, cloud identity.
 2. **kubectl read-only (optional).** If kubectl is detected and the user has not authorized any kubectl access yet, **first verify the local context actually points at the threat's cluster** — don't ask for a grant you can't use. Run `kubectl config current-context` (read-only, pre-authorized) and compare it against the threat's `kubernetes.cluster.name`. If they clearly **mismatch**, say so plainly — _"Local kube-context is `<ctx>`, but the threat is on `<cluster>`; kubectl probing here would target the wrong cluster"_ — and do **not** offer the grant. Instead offer to skip kubectl (continue MCP-only, degraded) or let the user switch context and re-run Step B. Only when the context matches (or you can't tell) ask: _"Authorize **read-only** kubectl access (`get`, `describe`, `logs`) for cluster `<context>` for this session? This lets me probe pod ownership, NetworkPolicy state, PDB/HPA constraints, and sidecars. yes / read-only / no."_ On yes or read-only, run the kubectl recipes from `architecture-probing.md`. On no, declare the gap and continue with degraded fidelity.
-3. **AWS read-only (optional).** If the threat implicates cloud identity (case file mentions IRSA, IMDS access, IAM role usage) and AWS CLI is detected, **first verify the active credentials match the threat's account.** Run `aws sts get-caller-identity` (read-only, pre-authorized) and compare the returned `Account` against the threat's `aws.accountId`. If they **mismatch**, say so — _"Active AWS profile is account `<id>`, but the threat is in `<accountId>`; these reads would hit the wrong account"_ — and do **not** offer the grant; offer to skip (note the cloud-identity gap) or let the user switch profile and re-run. Only when the account matches (or you can't tell) ask: _"Authorize **read-only** AWS CLI access with profile `<profile>` for account `<id>` for this session? This lets me check the IAM role, attached policies, and recent CloudTrail activity. yes / read-only / no."_ On yes or read-only, run the AWS recipes from `architecture-probing.md`.
+3. **Cloud identity read-only (optional).** If the threat implicates cloud identity (case file mentions IRSA / Workload Identity, IMDS access, IAM role usage), probe it as follows. The out-of-band CLI path here is worked through with **AWS** — for **GCP / Azure**, the local CLI recipes are not bundled, so rely on the SysQL cloud-identity recipe plus the in-product **CLOUD responder** actions (`FETCH_CLOUD_LOGS`, `IAM_QUARANTINE`), which are provider-uniform — see [`references/response-actions-catalog.md`](references/response-actions-catalog.md). For AWS, when the AWS CLI is detected, **first verify the active credentials match the threat's account.** Run `aws sts get-caller-identity` (read-only, pre-authorized) and compare the returned `Account` against the threat's `aws.accountId`. If they **mismatch**, say so — _"Active AWS profile is account `<id>`, but the threat is in `<accountId>`; these reads would hit the wrong account"_ — and do **not** offer the grant; offer to skip (note the cloud-identity gap) or let the user switch profile and re-run. Only when the account matches (or you can't tell) ask: _"Authorize **read-only** AWS CLI access with profile `<profile>` for account `<id>` for this session? This lets me check the IAM role, attached policies, and recent CloudTrail activity. yes / read-only / no."_ On yes or read-only, run the AWS recipes from `architecture-probing.md`.
 4. **Render the mini-map.** Use the shape shown in `consequence-analysis-guide.md`. Lead with workload identity, then inbound, outbound, sidecars, cloud identity, PDB/HPA, RBAC. Cite the source for every line.
 
 ### Step C — Propose actions with consequence analysis
@@ -238,6 +240,10 @@ Apply the canonical Bloom three-line error template (**what** / **why** / **fix*
 > Watcher couldn't find the container in `list_runtime_events`.
 > The container ID is gone — the kill succeeded.
 > Closing the watcher as `inconclusive` (success-with-caveat).
+
+> A `mcp__secure-mcp-server__*` call came back **denied** (the agent refused it, not a server error).
+> Prefix mismatch, not an auth/reachability failure — the Sysdig MCP server is registered under a different prefix than `secure-mcp-server`, so `allowed-tools` doesn't match.
+> Run `claude mcp list`, then re-register as `secure-mcp-server` or add the real `mcp__<name>__*` to permitted tools, and re-run. See the "denied / prefix mismatch" section in [`references/mcp-setup.md`](references/mcp-setup.md). Do not retry the denied call.
 
 ## Important rules
 

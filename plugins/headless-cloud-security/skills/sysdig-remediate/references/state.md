@@ -51,24 +51,37 @@ Every time a skill finds something new, it should update the state and save it b
       "date": "2025-03-15"
     }
   ],
+  "ticket_assignees": [
+    {
+      "image_reference": "quay.io/myorg/my-service:1.2.3",
+      "assignee": "jane.doe@example.com",
+      "source": "workload_owner",
+      "last_confirmed": "2026-07-08"
+    }
+  ],
   "remediation_history": [
     {
-      "date": "2025-03-15",
-      "zone": { "ref_id": "123", "name": "production" },
+      "date": "2026-07-08",
       "image": "quay.io/myorg/my-service:1.2.3",
       "summary": "A short summary of the actions taken for the remediation",
+      "deliverable": "both",
       "prs_opened": ["myorg/my-service#42"],
       "reviewers_confirmed": ["jane-doe"],
-      "ticket_updated": "PROJ-123"
+      "ticket_created": "PROJ-123",
+      "ticket_updated": null,
+      "job_id": "abc-123",
+      "job_closed": true
     }
   ]
 }
 ```
 
+`version_chains[].chain[].status` is `vulnerable | skipped | clean | unassessed` — `unassessed` means the version has no Critical/High known to Sysdig but has never been observed in the environment (presence probe, SKILL.md step 3d). Treat cached `unassessed` entries as re-checkable: a later session may find the version observed.
+
 ## Read/write rules
 
 - **Get** the state at the start of every session (step 1) by calling the MCP tool `get_skill_state` with `{ "skill_state": "remediate" }`. A `null` response means no state exists yet — start with `{ "version": 0 }`.
-- **Save** the state at the end of every session (step 5) by calling the MCP tool `save_skill_state` with `{ "skill_state": "remediate", "version": <n>, "data": { ... } }`. Read the current contents first, merge new data (append to arrays, update existing entries by matching key fields), then pass the full merged object as `data`.
+- **Save** the state at the end of every session (step 7) by calling the MCP tool `save_skill_state` with `{ "skill_state": "remediate", "version": <n>, "data": { ... } }`. Read the current contents first, merge new data (append to arrays, update existing entries by matching key fields), then pass the full merged object as `data`.
 - **Version argument** — the server uses `version` for optimistic concurrency. Pass it as a separate argument (do not include it inside `data`):
   - First write (`get_skill_state` returned `null`) → call with `version: 0`. The server creates the record.
   - Subsequent writes → call with the same `version` value the previous `get_skill_state` returned. On success the server bumps it; on conflict it returns 409.
@@ -78,6 +91,11 @@ Every time a skill finds something new, it should update the state and save it b
   - `repo_reviewers`: match on `repository`
   - `vulnerability_resolutions`: match on `package` + `from_version`
   - `version_chains`: match on `package` + first chain entry version
+  - `ticket_assignees`: match on `image_reference`
   - `remediation_history`: always append (no dedup)
 - When updating an existing entry, replace it entirely with the new version (do not deep-merge fields).
 - Dates use `YYYY-MM-DD` format.
+
+## State is a cache, not an authority
+
+State speeds sessions up (known repos, chains, reviewers, assignees). It is **never** used to decide whether work already exists — dedup (step 2) always re-checks server-side sources: job artifacts and external Jira/forge searches. When state and those sources disagree, trust the sources and update the state.

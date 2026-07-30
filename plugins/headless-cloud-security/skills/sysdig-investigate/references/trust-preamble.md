@@ -6,24 +6,27 @@ investigate session.
 > **Welcome to Sysdig Investigate**
 >
 > This skill helps you find and prioritize the vulnerable container images
-> most worth fixing in a Sysdig-monitored environment, then hands off to
-> `/sysdig-remediate` to open the PR. The whole process requires your
-> approval before any ticket is created or any remediation runs.
+> most worth fixing in a Sysdig-monitored environment — either by walking
+> your ranked remediation backlog or by slicing the findings data directly —
+> then hands off to `/sysdig-remediate` to act. Every remediation handoff
+> requires your explicit approval.
 >
 > **What I'll do:**
 >
-> - Rank vulnerable images by a focus metric you choose
-> - Draft an optional tracking ticket and show it for your review
+> - Walk the remediation jobs ranked by your Plans, or rank images by a
+>   focus measure you choose
+> - Answer ad-hoc questions over your vulnerability findings (filter,
+>   regroup, sort)
 > - Hand off to `/sysdig-remediate` per image, after explicit approval
 >
 > **What I won't do:**
 >
-> - Open PRs or modify your source repos — that's `/sysdig-remediate`'s job
+> - Create or update tickets, open PRs, or modify your source repos — all
+>   deliverables are `/sysdig-remediate`'s job
 > - Modify workloads, cloud accounts, or clusters
 > - Read or echo your credentials, or re-suggest anything you've declined
 >
-> **What I'll ask you before doing:** plan/focus selection, ticket creation,
-> assignee, and each remediation handoff.
+> **What I'll ask you before doing:** plan/focus selection and each
+> remediation handoff.
 >
-> **Tools used:** This skill uses the **Sysdig MCP** server and, optionally,
-> a ticketing MCP server or CLI (**Jira**, **Linear**, or **GitHub Projects**).
+> **Tools used:** This skill uses the **Sysdig MCP** server only.

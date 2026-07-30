@@ -4,26 +4,44 @@
 # Provider: Azure | Scope: Single Subscription
 #
 # Instructions:
-#   1. Replace all {{PLACEHOLDER}} values with your actual values
-#   2. Remove any feature sections you don't need (between === markers)
-#   3. Run: export SYSDIG_SECURE_API_TOKEN="<your-token>"
-#   4. Run: az login --tenant "{{AZURE_TENANT_ID}}"
+#   1. Replace all {{PLACEHOLDER}} values with your actual values.
+#   2. Remove any feature sections you don't need (between === markers).
+#   3. Provide the token via env: export TF_VAR_sysdig_secure_api_token="<token>"
+#      (the skill sources it from .sysdig-token — never hardcode it here).
+#   4. Authenticate: az login --tenant "{{AZURE_TENANT_ID}}"
 #   5. Run: terraform init && terraform plan && terraform apply
+#
+# Feature model (single subscription — sysdiglabs/secure/azurerm modules):
+#   Foundational (always): Inventory + Posture & Compliance (CSPM) and
+#     Basic Identity Capabilities (CIEM Basic). Basic Identity needs a MANUAL
+#     Entra ID admin-consent step after apply (see references/azure.md §5).
+#   Additional (opt-in): Threat Detection (CDR via Event Hub — needs a region),
+#     Host Scanning (agentless VM), Workload Scanning (ACA/ACI, Functions, AKS).
+#
+#   NOTE: Advanced CIEM (usage-based least-privilege) is NOT available at single
+#   subscription scope on Azure — it requires tenant/organizational onboarding
+#   (Directory Readers is a tenant-level permission). Use the tenant template
+#   for Advanced CIEM.
 
 terraform {
-  required_version = ">= 1.10.0"
+  required_version = ">= 1.5.0"
   required_providers {
     sysdig = {
       source  = "sysdiglabs/sysdig"
       version = "~> 3.3"
     }
+    # The onboarding wizard export writes "~> 3" for azurerm and omits azuread.
+    # Both entries below keep the wizard's 3.x major-version ceiling but also
+    # record the floors this configuration was actually validated against, so a
+    # fresh `terraform init` cannot resolve down to an untested 3.0.x azurerm or
+    # an unconstrained azuread major.
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 3.76.0"
+      version = "~> 3.76"
     }
     azuread = {
       source  = "hashicorp/azuread"
-      version = ">= 2.43.0"
+      version = ">= 2.43.0, < 3.0.0"
     }
   }
 }
@@ -41,27 +59,31 @@ provider "azurerm" {
   tenant_id       = "{{AZURE_TENANT_ID}}"
 }
 
+# azuread is required by the onboarding module to create the Entra ID
+# application; it is pinned in required_providers above.
 provider "azuread" {
   tenant_id = "{{AZURE_TENANT_ID}}"
 }
 
 # --- Onboarding (always required) ---
-# Registers this Azure subscription with Sysdig Secure and creates
-# a Sysdig service principal with limited permissions.
+# Registers this Azure subscription with Sysdig Secure and creates a read-only
+# Sysdig service principal in Entra ID.
 
 module "onboarding" {
   source          = "sysdiglabs/secure/azurerm//modules/onboarding"
+  version         = "~> 3.0"
   subscription_id = "{{AZURE_SUBSCRIPTION_ID}}"
   tenant_id       = "{{AZURE_TENANT_ID}}"
 }
 
-# === CSPM (Cloud Security Posture Management) ===
-# Assigns Reader role + custom role to the Sysdig service principal
-# for resource discovery and compliance evaluation.
+# === CSPM (Posture & Compliance + Inventory) ===
+# Foundational, always included. Assigns Reader + a custom role to the Sysdig
+# service principal for resource discovery and compliance evaluation.
 
 module "config-posture" {
   source                   = "sysdiglabs/secure/azurerm//modules/config-posture"
-  subscription_id          = "{{AZURE_SUBSCRIPTION_ID}}"
+  version                  = "~> 3.0"
+  subscription_id          = module.onboarding.subscription_id
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 }
 
@@ -69,23 +91,24 @@ resource "sysdig_secure_cloud_auth_account_feature" "config_posture" {
   account_id = module.onboarding.sysdig_secure_account_id
   type       = "FEATURE_SECURE_CONFIG_POSTURE"
   enabled    = true
-  components = [module.config-posture.config_posture_component_id]
+  components = [module.config-posture.service_principal_component_id]
   depends_on = [module.config-posture]
 }
 
 # === END CSPM ===
 
-# === CIEM Basic (Cloud Identity & Entitlement Management) ===
-# Analyzes IAM roles and policies for overly permissive access.
-# Uses the same posture data as CSPM — no additional infrastructure.
-# NOTE: Keep this block even when enabling CIEM Advanced — advanced
-# builds on top of basic via concat() on its components.
+# === CIEM Basic (Basic Identity Capabilities) ===
+# Foundational, always included. Analyzes configuration-based IAM risks and
+# identity hygiene using the same posture data as CSPM — no extra infrastructure.
+# NOTE: reading Entra ID directory data requires a MANUAL admin-consent step in
+# the Azure portal after apply (see references/azure.md §5). Advanced CIEM
+# (usage-based) is tenant-scope only — not available here.
 
 resource "sysdig_secure_cloud_auth_account_feature" "identity_entitlement_basic" {
   account_id = module.onboarding.sysdig_secure_account_id
   type       = "FEATURE_SECURE_IDENTITY_ENTITLEMENT"
   enabled    = true
-  components = [module.config-posture.config_posture_component_id]
+  components = [module.config-posture.service_principal_component_id]
   depends_on = [module.config-posture, sysdig_secure_cloud_auth_account_feature.config_posture]
   flags = {
     "CIEM_FEATURE_MODE" : "basic"
@@ -98,13 +121,15 @@ resource "sysdig_secure_cloud_auth_account_feature" "identity_entitlement_basic"
 
 # === END CIEM Basic ===
 
-# === CDR (Cloud Detection & Response) ===
-# Creates an Event Hub namespace + diagnostic settings for streaming
-# Azure Activity Logs and Entra ID logs for threat detection.
+# === CDR (Threat Detection) ===
+# Streams Azure Activity Logs (and, optionally, Entra ID logs) to Sysdig via an
+# Event Hub for real-time threat detection. Requires a region for the Event Hub
+# infrastructure. Keep this block only when Threat Detection is selected.
 
 module "event-hub" {
   source                   = "sysdiglabs/secure/azurerm//modules/integrations/event-hub"
-  subscription_id          = "{{AZURE_SUBSCRIPTION_ID}}"
+  version                  = "~> 3.0"
+  subscription_id          = module.onboarding.subscription_id
   region                   = "{{AZURE_REGION}}"
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 }
@@ -119,40 +144,14 @@ resource "sysdig_secure_cloud_auth_account_feature" "threat_detection" {
 
 # === END CDR ===
 
-# === CIEM Advanced (upgrades CIEM Basic) ===
-# Least-privilege analysis based on actual usage patterns.
-# Requires BOTH config-posture AND event-hub data.
-# NOTE: Requires the CIEM Basic block above — advanced uses concat()
-# to build on basic's components.
-
-resource "sysdig_secure_cloud_auth_account_feature" "identity_entitlement_advanced" {
-  account_id = module.onboarding.sysdig_secure_account_id
-  type       = "FEATURE_SECURE_IDENTITY_ENTITLEMENT"
-  enabled    = true
-  components = concat(
-    tolist(sysdig_secure_cloud_auth_account_feature.identity_entitlement_basic.components),
-    [module.event-hub.event_hub_component_id]
-  )
-  depends_on = [
-    module.event-hub,
-    module.event-hub.post_ciem_basic_delay
-  ]
-  flags = { "CIEM_FEATURE_MODE" : "advanced" }
-
-  lifecycle {
-    ignore_changes = [flags, components]
-  }
-}
-
-# === END CIEM Advanced ===
-
-# === VM (Vulnerability Management — Agentless Scanning) ===
-# Scans VMs and container images via Azure Lighthouse for
-# cross-subscription disk snapshot access.
+# === VM (Host Scanning — Agentless) ===
+# Agentless vulnerability scanning of VM disks via Azure Lighthouse (temporary
+# snapshot access). Keep this block only when Host Scanning is selected.
 
 module "agentless-scanning" {
   source                   = "sysdiglabs/secure/azurerm//modules/agentless-scanning"
-  subscription_id          = "{{AZURE_SUBSCRIPTION_ID}}"
+  version                  = "~> 3.0"
+  subscription_id          = module.onboarding.subscription_id
   sysdig_secure_account_id = module.onboarding.sysdig_secure_account_id
 }
 
@@ -162,6 +161,73 @@ resource "sysdig_secure_cloud_auth_account_feature" "agentless_scanning" {
   enabled    = true
   components = [module.agentless-scanning.service_principal_component_id]
   depends_on = [module.agentless-scanning]
+
+  # "Select Scanning Types" sub-step. On Azure only Container scanning is
+  # offered; SCANNING_MALWARE_ENABLED is always "false" (no malware type in the
+  # Azure wizard). Set at onboarding, toggleable later in the Sysdig UI.
+  flags = {{AGENTLESS_SCANNING_FLAGS}}
+  # Example: { "SCANNING_HOST_CONTAINER_ENABLED" : "true", "SCANNING_MALWARE_ENABLED" : "false" }
+
+  lifecycle {
+    ignore_changes = [flags]
+  }
 }
 
 # === END VM ===
+
+# === WORKLOAD_SCANNING (Workload Scanning) ===
+# Scans running containers and Azure Container Registry images. One shared
+# module; each selected "Workload Type" adds its own feature resource and, for
+# AKS / Functions, flips the matching module toggle. Keep at least one of the
+# three sub-blocks below; remove the workload types the user did not select and
+# set the corresponding toggle to false ({{AKS_ENABLED}} / {{FUNCTIONS_ENABLED}}).
+# ACA/ACI (containers) needs no module toggle — it is covered by the base module.
+
+module "vm-workload-scanning" {
+  source                    = "sysdiglabs/secure/azurerm//modules/vm-workload-scanning"
+  version                   = "~> 3.0"
+  subscription_id           = module.onboarding.subscription_id
+  sysdig_secure_account_id  = module.onboarding.sysdig_secure_account_id
+  is_organizational         = module.onboarding.is_organizational
+  include_management_groups = module.onboarding.include_management_groups
+  exclude_management_groups = module.onboarding.exclude_management_groups
+  include_subscriptions     = module.onboarding.include_subscriptions
+  exclude_subscriptions     = module.onboarding.exclude_subscriptions
+
+  sysdig_cspm_sp_object_id = module.config-posture.sysdig_cspm_sp_object_id
+
+  aks_enabled       = {{AKS_ENABLED}}
+  functions_enabled = {{FUNCTIONS_ENABLED}}
+}
+
+#   === WORKLOAD_ACA_ACI (UI: Azure Container Instances and Azure Container apps) ===
+resource "sysdig_secure_cloud_auth_account_feature" "vm_workload_scanning_aca_aci" {
+  account_id = module.onboarding.sysdig_secure_account_id
+  type       = "FEATURE_SECURE_WORKLOAD_SCANNING_CONTAINERS"
+  enabled    = true
+  components = [module.vm-workload-scanning.service_principal_component_id]
+  depends_on = [module.vm-workload-scanning]
+}
+#   === END WORKLOAD_ACA_ACI ===
+
+#   === WORKLOAD_AKS (UI: Azure Kubernetes Service) ===
+resource "sysdig_secure_cloud_auth_account_feature" "vm_workload_scanning_kubernetes" {
+  account_id = module.onboarding.sysdig_secure_account_id
+  type       = "FEATURE_SECURE_WORKLOAD_SCANNING_KUBERNETES"
+  enabled    = true
+  components = [module.vm-workload-scanning.service_principal_component_id]
+  depends_on = [module.vm-workload-scanning]
+}
+#   === END WORKLOAD_AKS ===
+
+#   === WORKLOAD_FUNCTIONS (UI: Azure Functions (containers only)) ===
+resource "sysdig_secure_cloud_auth_account_feature" "vm_workload_scanning_functions" {
+  account_id = module.onboarding.sysdig_secure_account_id
+  type       = "FEATURE_SECURE_WORKLOAD_SCANNING_FUNCTIONS"
+  enabled    = true
+  components = [module.vm-workload-scanning.service_principal_component_id]
+  depends_on = [module.vm-workload-scanning]
+}
+#   === END WORKLOAD_FUNCTIONS ===
+
+# === END WORKLOAD_SCANNING ===

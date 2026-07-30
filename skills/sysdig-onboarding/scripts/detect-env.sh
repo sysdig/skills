@@ -29,27 +29,10 @@ NC='\033[0m'
 JSON_MODE=false
 [[ "${1:-}" == "--json" ]] && JSON_MODE=true
 
-# --- Token variables (ordered by preference: current first, then legacy) ---
-TOKEN_VARS=(
-  "SYSDIG_SECURE_API_TOKEN"    # Terraform provider, MCP server, current standard
-  "TF_VAR_sysdig_secure_api_token"  # Terraform variable (same token)
-  "SECURE_API_TOKEN"           # sysdig-cli-scanner, Harbor scanner
-  "SYSDIG_SECURE_TOKEN"        # GitHub Actions
-  "SYSDIG_MCP_API_TOKEN"       # legacy MCP-specific override (deprecated, use SYSDIG_SECURE_API_TOKEN)
-  "SDC_SECURE_TOKEN"           # Python SDK, sdc_client (legacy)
-  "SDC_TOKEN"                  # sdc_client generic fallback (legacy)
-)
-
-# --- URL variables (ordered by preference) ---
-URL_VARS=(
-  "SYSDIG_SECURE_URL"          # GitHub Actions, Backstage, MCP server
-  "SYSDIG_BASE_URL"            # Onboarding skill
-  "SYSDIG_SECURE_ENDPOINT"     # Backstage integration
-  "SYSDIG_MCP_API_HOST"        # legacy MCP-specific override (deprecated, use SYSDIG_SECURE_URL)
-  "SDC_SECURE_URL"             # Python SDK, sdc_client (legacy)
-  "SDC_URL"                    # sdc_client generic (legacy)
-  "SDC_MONITOR_URL"            # Python SDK Monitor (reveals region)
-)
+# --- Credential variable priority lists ---
+# Single source of truth: SYSDIG_TOKEN_VARS / SYSDIG_URL_VARS in
+# resolve-credentials.sh (shared with detect-region.sh, verify-cloud-status.sh).
+source "$(dirname "${BASH_SOURCE[0]}")/resolve-credentials.sh"
 
 # --- Check which variables are set ---
 best_token=""
@@ -57,14 +40,14 @@ best_url=""
 found_tokens=()
 found_urls=()
 
-for var in "${TOKEN_VARS[@]}"; do
+for var in "${SYSDIG_TOKEN_VARS[@]}"; do
   if [[ -n "${!var+x}" && -n "${!var}" ]]; then
     found_tokens+=("$var")
     [[ -z "$best_token" ]] && best_token="$var"
   fi
 done
 
-for var in "${URL_VARS[@]}"; do
+for var in "${SYSDIG_URL_VARS[@]}"; do
   if [[ -n "${!var+x}" && -n "${!var}" ]]; then
     found_urls+=("$var")
     [[ -z "$best_url" ]] && best_url="$var"

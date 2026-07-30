@@ -21,6 +21,8 @@ cluster_config:
 # --- Sysdig Connection ---
 # IMPORTANT: This is the Agent Access Key (Settings → Agent Keys),
 # NOT the Secure API Token. They are different credentials.
+# SECURITY: once the real key is pasted, treat this file as a secret —
+# do not commit it to version control.
 sysdig_endpoint:
   region: "{{SYSDIG_REGION}}"         # us1, us2, us4, eu1, eu2, au1, in1, me2
   access_key: "REPLACE_WITH_YOUR_SYSDIG_AGENT_ACCESS_KEY"
@@ -113,6 +115,17 @@ features:
   respond:
     rapid_response:
       enabled: false
+      # REQUIRED whenever rapid_response.enabled is true. This is the
+      # passphrase an operator enters to open a Rapid Response session — set
+      # it to a strong secret you control (NOT the Agent Access Key). Edit
+      # this line in the file directly, the same way as sysdig_endpoint.access_key.
+      # If left empty, the Rapid Response subprocess crash-loops
+      # ("Flag \"password\" cannot be empty") and the Host Shield readiness
+      # probe never turns green (pod stuck 0/1 Ready).
+      # For production, prefer a pre-created Secret instead of the inline
+      # value: comment out `password` and set `password_existing_secret`
+      # (and optionally `password_existing_secret_key`, default "password").
+      password: "REPLACE_WITH_YOUR_RAPID_RESPONSE_PASSWORD"
     response_actions:
       enabled: false
   # === END RAPID_RESPONSE ===
@@ -126,6 +139,47 @@ host:
   # image:
   #   registry: "{{PRIVATE_REGISTRY}}"
   # === END AIRGAP ===
+
+# === HOST_WINDOWS ===
+# Windows Host Shield — DaemonSet on Windows worker nodes (Kubernetes only).
+# There is NO standalone/MSI path. Same sysdig/shield chart, separate image.
+# Pods run as a Windows HostProcess container (NT AUTHORITY\SYSTEM, hostNetwork).
+# Scheduled on amd64 Windows nodes only (kubernetes.io/os=windows).
+#
+# FEATURE RESTRICTION (critical): on Windows ONLY two features render —
+#   features.posture.host_posture
+#   features.vulnerability_management.host_vulnerability_management
+# All other features above are SILENTLY DROPPED on Windows. Set only these two
+# to enabled: true in the `features:` block above when onboarding Windows nodes;
+# leave detections / investigations / respond / admission / cluster features off.
+#
+# Auth reuses the SAME Agent Access Key as the Linux/K8s components above
+# (sysdig_endpoint.access_key) — no Windows-specific credential.
+#
+# Remove this entire block (markers included) if the cluster has no Windows nodes.
+# host_windows:
+#   enabled: true                       # turns on the Windows DaemonSet
+#   image:
+#     registry: "quay.io"
+#     repository: "sysdig"
+#     name: "host-shield"               # full ref: quay.io/sysdig/host-shield:0.17.0
+#     tag: "0.17.0"                     # overridable
+#     pull_policy: "IfNotPresent"
+#   node_selector:
+#     "kubernetes.io/os": "windows"     # schedules on Windows nodes only (amd64)
+#   additional_settings:
+#     monitoring_port: 8081             # liveness/readiness GET 127.0.0.1/healthz port
+#
+# The two (and only) supported Windows feature toggles live in the shared
+# `features:` block above. For Windows nodes, set exactly these:
+#   features:
+#     posture:
+#       host_posture:
+#         enabled: true
+#     vulnerability_management:
+#       host_vulnerability_management:
+#         enabled: true
+# === END HOST_WINDOWS ===
 
 # === AIRGAP_CLUSTER ===
 # Uncomment for air-gapped / private registry clusters

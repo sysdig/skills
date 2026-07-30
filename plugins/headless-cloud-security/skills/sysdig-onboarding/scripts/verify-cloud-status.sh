@@ -11,14 +11,18 @@
 #   --expect         — exit 2 if account not found or no features enabled
 #                      (for retry loops in post-apply verification)
 #
-# Environment (set before calling, e.g. via `source .secrets/env`):
+# Environment (set before calling, e.g. via `source .sysdig-token`):
 #   SYSDIG_SECURE_API_TOKEN — API token
 #   SYSDIG_BASE_URL         — API base URL
 #
-# If env vars are not set, falls back to sourcing .secrets/env from cwd.
+# If env vars are not set, falls back to .sysdig-token then .secrets/env from
+# cwd. Fallback files are PARSED for the known variables, never
+# sourced/executed.
 #
 # Output:
-#   JSON with account status fields. Token NEVER appears in output.
+#   JSON with account status fields. Token NEVER appears in output or
+#   process arguments (the Authorization header is fed to curl via a
+#   private pipe, not argv).
 #
 # API:
 #   Uses /api/cloudauth/v1/accounts (legacy API, YELLOW flag).
@@ -46,16 +50,20 @@ case "$PROVIDER_ARG" in
 esac
 
 # Load token/config if env vars are not set
-# Priority: env var > .sysdig-token > .secrets/env
+# Priority: env var (incl. bridged legacy/MCP aliases) > .sysdig-token > .secrets/env
+# resolve_sysdig_credentials bridges legacy vars (e.g. SYSDIG_MCP_API_TOKEN /
+# SYSDIG_MCP_API_HOST) into the canonical names.
+source "$(dirname "${BASH_SOURCE[0]}")/resolve-credentials.sh"
+resolve_sysdig_credentials
+# This script reads SYSDIG_BASE_URL; mirror the canonical SYSDIG_SECURE_URL into it.
+[[ -z "${SYSDIG_BASE_URL:-}" && -n "${SYSDIG_SECURE_URL:-}" ]] && SYSDIG_BASE_URL="${SYSDIG_SECURE_URL}"
+
 if [[ -z "${SYSDIG_SECURE_API_TOKEN:-}" || -z "${SYSDIG_BASE_URL:-}" ]]; then
-  if [[ -f ".sysdig-token" ]]; then
-    source ".sysdig-token"
-  fi
+  # Fallback files are parsed for the known variables — never executed
+  load_sysdig_token_file ".sysdig-token" || true
   # .secrets/env may have SYSDIG_BASE_URL even if token came from .sysdig-token
   if [[ -z "${SYSDIG_SECURE_API_TOKEN:-}" || -z "${SYSDIG_BASE_URL:-}" ]]; then
-    if [[ -f ".secrets/env" ]]; then
-      source ".secrets/env"
-    fi
+    load_sysdig_token_file ".secrets/env" || true
   fi
   if [[ -z "${SYSDIG_SECURE_API_TOKEN:-}" || -z "${SYSDIG_BASE_URL:-}" ]]; then
     echo "ERROR: SYSDIG_SECURE_API_TOKEN and SYSDIG_BASE_URL must be set." >&2
@@ -69,13 +77,28 @@ SYSDIG_BASE_URL="${SYSDIG_BASE_URL%/}"
 
 # Fetch accounts via cloudauth/v1 API (legacy, YELLOW flag)
 # stderr redirected to /dev/null to prevent any header/token leakage
-RESPONSE=$(curl -s -S \
-  -H "Authorization: Bearer ${SYSDIG_SECURE_API_TOKEN}" \
+HTTP_RESPONSE=$(curl -s -m 15 \
+  -K <(printf 'header = "Authorization: Bearer %s"\n' "$SYSDIG_SECURE_API_TOKEN") \
+  -w $'\n%{http_code}' \
   "${SYSDIG_BASE_URL}/api/cloudauth/v1/accounts?provider=${PROVIDER}" \
   2>/dev/null) || {
-    echo "ERROR: API call failed (check token and base URL)" >&2
+    echo "ERROR: API call failed (network error or timeout)" >&2
     exit 1
   }
+
+HTTP_CODE="${HTTP_RESPONSE##*$'\n'}"
+RESPONSE="${HTTP_RESPONSE%$'\n'*}"
+case "$HTTP_CODE" in
+  200) ;;
+  401|403)
+    echo "ERROR: Sysdig API rejected the token (HTTP ${HTTP_CODE}) — invalid, expired, or wrong region for ${SYSDIG_BASE_URL}" >&2
+    exit 1
+    ;;
+  *)
+    echo "ERROR: Sysdig API returned HTTP ${HTTP_CODE} from ${SYSDIG_BASE_URL}" >&2
+    exit 1
+    ;;
+esac
 
 if [[ -n "$CLOUD_ACCOUNT_ID" ]]; then
   # Filter by cloud provider account ID (providerId field)
@@ -91,7 +114,7 @@ if [[ -n "$CLOUD_ACCOUNT_ID" ]]; then
           (.feature | to_entries | map(select(.value.enabled == true) | .key) | sort)
         else [] end
       )
-    }' 2>/dev/null)
+    }' 2>/dev/null) || MATCH=""
 
   if [[ -z "$MATCH" ]]; then
     echo "Account $CLOUD_ACCOUNT_ID not found for provider $PROVIDER_ARG"

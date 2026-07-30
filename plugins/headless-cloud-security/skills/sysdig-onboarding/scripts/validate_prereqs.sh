@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # validate_prereqs.sh — Check prerequisites for Sysdig onboarding
 #
-# Usage: validate_prereqs.sh <type> [--json] [--aws-profile NAME]
+# Usage: validate_prereqs.sh <type> [--json | --blockers] [--aws-profile NAME]
 #   type: aws | gcp | azure | kubernetes | host
 #   --json: output structured JSON instead of colored text
+#   --blockers: render ONLY the failures, in the exact user-facing blocker
+#               format the skill prescribes (one ❌ + Fix: pair per failure,
+#               platform-appropriate fix picked via uname). Agents show this
+#               output verbatim — never reformat it.
 #   --aws-profile NAME: use a specific AWS CLI profile
 #
 # Exit codes:
@@ -20,8 +24,12 @@ NC='\033[0m' # No Color
 PASS=0
 FAIL=0
 JSON_MODE=false
+BLOCKERS_MODE=false
 JSON_CHECKS=""
 AWS_PROFILE_ARG=""
+BLOCK_NAMES=()
+BLOCK_DETAILS=()
+BLOCK_FIXES=()
 
 # Escape a string for safe JSON embedding
 json_escape() {
@@ -47,7 +55,9 @@ json_add() {
 }
 
 pass() {
-    if [[ "$JSON_MODE" == "true" ]]; then
+    if [[ "$BLOCKERS_MODE" == "true" ]]; then
+        :  # blockers mode reports failures only
+    elif [[ "$JSON_MODE" == "true" ]]; then
         json_add "${2:-$1}" "pass" "$1" "" ""
     else
         echo -e "  ${GREEN}✓${NC} $1"
@@ -56,7 +66,15 @@ pass() {
 }
 
 fail() {
-    if [[ "$JSON_MODE" == "true" ]]; then
+    if [[ "$BLOCKERS_MODE" == "true" ]]; then
+        BLOCK_NAMES+=("${2:-$1}")
+        BLOCK_DETAILS+=("$1")
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            BLOCK_FIXES+=("${3:-}")
+        else
+            BLOCK_FIXES+=("${4:-}")
+        fi
+    elif [[ "$JSON_MODE" == "true" ]]; then
         json_add "${2:-$1}" "fail" "$1" "${3:-}" "${4:-}"
     else
         echo -e "  ${RED}✗${NC} $1"
@@ -65,7 +83,9 @@ fail() {
 }
 
 warn() {
-    if [[ "$JSON_MODE" == "true" ]]; then
+    if [[ "$BLOCKERS_MODE" == "true" ]]; then
+        :  # warnings are not blockers
+    elif [[ "$JSON_MODE" == "true" ]]; then
         json_add "${2:-$1}" "warn" "$1" "${3:-}" "${4:-}"
     else
         echo -e "  ${YELLOW}!${NC} $1"
@@ -73,10 +93,13 @@ warn() {
 }
 
 check_terraform() {
-    [[ "$JSON_MODE" != "true" ]] && echo "" && echo "Terraform:"
+    [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]] && echo "" && echo "Terraform:"
     if command -v terraform &>/dev/null; then
         local version
-        version=$(terraform version -json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['terraform_version'])" 2>/dev/null || terraform version | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+        version=$(terraform version -json 2>/dev/null | jq -r '.terraform_version' 2>/dev/null || true)
+        if [[ -z "$version" || "$version" == "null" ]]; then
+            version=$(terraform version | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+        fi
         local major minor
         major=$(echo "$version" | cut -d. -f1)
         minor=$(echo "$version" | cut -d. -f2)
@@ -93,7 +116,7 @@ check_terraform() {
 }
 
 check_aws() {
-    [[ "$JSON_MODE" != "true" ]] && echo "" && echo "AWS:"
+    [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]] && echo "" && echo "AWS:"
     if command -v aws &>/dev/null; then
         pass "AWS CLI installed ($(command -v aws))" "AWS CLI"
     else
@@ -102,10 +125,10 @@ check_aws() {
         return
     fi
 
-    if aws sts get-caller-identity &>/dev/null; then
-        local account arn
-        account=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
-        arn=$(aws sts get-caller-identity --query Arn --output text 2>/dev/null)
+    # Single API call: auth check + account + ARN together
+    local identity account arn
+    if identity=$(aws sts get-caller-identity --query '[Account,Arn]' --output text 2>/dev/null); then
+        read -r account arn <<< "$identity" || true
         pass "AWS authenticated (account: ${account}, identity: ${arn})" "AWS Auth"
     else
         fail "AWS CLI not authenticated" "AWS Auth" \
@@ -114,7 +137,7 @@ check_aws() {
 }
 
 check_gcp() {
-    [[ "$JSON_MODE" != "true" ]] && echo "" && echo "GCP:"
+    [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]] && echo "" && echo "GCP:"
     if command -v gcloud &>/dev/null; then
         pass "Google Cloud CLI installed ($(command -v gcloud))" "GCP CLI"
     else
@@ -140,12 +163,12 @@ check_gcp() {
 }
 
 check_azure() {
-    [[ "$JSON_MODE" != "true" ]] && echo "" && echo "Azure:"
+    [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]] && echo "" && echo "Azure:"
     if command -v az &>/dev/null; then
         pass "Azure CLI installed ($(command -v az))" "Azure CLI"
     else
         fail "Azure CLI not found" "Azure CLI" \
-            "brew install azure-cli" "curl -sL https://aka.ms/InstallAzureCLIDeb | bash"
+            "brew install azure-cli" "See https://learn.microsoft.com/cli/azure/install-azure-cli-linux"
         return
     fi
 
@@ -161,7 +184,7 @@ check_azure() {
 }
 
 check_kubernetes() {
-    [[ "$JSON_MODE" != "true" ]] && echo "" && echo "Kubernetes:"
+    [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]] && echo "" && echo "Kubernetes:"
 
     # kubectl
     if command -v kubectl &>/dev/null; then
@@ -189,9 +212,11 @@ check_kubernetes() {
             "brew install helm" "See https://helm.sh/docs/intro/install/"
     fi
 
-    # Cluster connectivity
+    # Cluster connectivity — probed ONCE, result reused by the checks below
+    local cluster_ok=false
     if command -v kubectl &>/dev/null; then
         if kubectl cluster-info &>/dev/null; then
+            cluster_ok=true
             local ctx
             ctx=$(kubectl config current-context 2>/dev/null)
             pass "kubectl connected to cluster (context: ${ctx})" "Cluster"
@@ -202,10 +227,9 @@ check_kubernetes() {
     fi
 
     # K8s server version (>= 1.25 recommended)
-    if command -v kubectl &>/dev/null && kubectl cluster-info &>/dev/null; then
+    if [[ "$cluster_ok" == "true" ]]; then
         local server_ver
-        server_ver=$(kubectl version -o json 2>/dev/null | python3 -c \
-            "import sys,json; v=json.load(sys.stdin).get('serverVersion',{}); print(v.get('major','0')+'.'+v.get('minor','0').rstrip('+'))" 2>/dev/null || echo "")
+        server_ver=$(kubectl version -o json 2>/dev/null | jq -r '.serverVersion | "\(.major).\(.minor)"' 2>/dev/null | tr -d '+' || echo "")
         if [[ -n "$server_ver" ]]; then
             local sv_major sv_minor
             sv_major=$(echo "$server_ver" | cut -d. -f1)
@@ -220,7 +244,7 @@ check_kubernetes() {
     fi
 
     # RBAC — Shield helm chart creates cluster-scoped resources
-    if command -v kubectl &>/dev/null && kubectl cluster-info &>/dev/null; then
+    if [[ "$cluster_ok" == "true" ]]; then
         local rbac_ok=true
         # Namespace-scoped: deployments, daemonsets, secrets
         kubectl auth can-i create deployments -n sysdig-agent &>/dev/null || rbac_ok=false
@@ -249,7 +273,7 @@ check_kubernetes() {
     fi
 
     # Node resources — disk, CPU, memory
-    if command -v kubectl &>/dev/null && kubectl cluster-info &>/dev/null; then
+    if [[ "$cluster_ok" == "true" ]]; then
         # Check for DiskPressure on any node
         local disk_pressure
         disk_pressure=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .status.conditions[?(@.type=="DiskPressure")]}{.status}{end}{"\n"}{end}' 2>/dev/null | grep True || true)
@@ -275,7 +299,7 @@ check_kubernetes() {
     fi
 
     # Existing installation check
-    if command -v helm &>/dev/null && kubectl cluster-info &>/dev/null; then
+    if command -v helm &>/dev/null && [[ "$cluster_ok" == "true" ]]; then
         local existing
         existing=$(helm list -n sysdig-agent -q 2>/dev/null)
         if [[ -n "$existing" ]]; then
@@ -285,8 +309,24 @@ check_kubernetes() {
     fi
 }
 
+check_utils() {
+    [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]] && echo "" && echo "Utilities:"
+    if command -v curl &>/dev/null; then
+        pass "curl installed" "curl"
+    else
+        fail "curl not found" "curl" "brew install curl" "apt install curl"
+    fi
+    if command -v jq &>/dev/null; then
+        pass "jq installed" "jq"
+    else
+        fail "jq not found" "jq" "brew install jq" "apt install jq"
+    fi
+}
+
 check_host() {
-    [[ "$JSON_MODE" != "true" ]] && echo "" && echo "Host:"
+    [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]] && echo "" && echo "Host:"
+
+    # 1. Kernel version (>= 3.10 for eBPF)
     local kver
     kver=$(uname -r | grep -oE '^[0-9]+\.[0-9]+')
     local kmajor kminor
@@ -299,11 +339,71 @@ check_host() {
             "Upgrade kernel" "Upgrade kernel"
     fi
 
+    # 2. Root / sudo access
     if [[ $EUID -eq 0 ]]; then
         pass "Running as root" "Root Access"
     else
-        warn "Not running as root. Agent installation may require sudo." "Root Access" \
+        warn "Not running as root. Agent installation requires sudo." "Root Access" \
             "sudo -i" "sudo -i"
+    fi
+
+    # 3. Distribution detection
+    if [[ -f /etc/os-release ]]; then
+        local distro version
+        distro=$(. /etc/os-release && echo "$ID")
+        version=$(. /etc/os-release && echo "$VERSION_ID")
+        local arch
+        arch=$(uname -m)
+        pass "Detected ${distro} ${version} (${arch})" "Distribution"
+    elif [[ -f /etc/redhat-release ]]; then
+        local rh_info
+        rh_info=$(head -1 /etc/redhat-release)
+        pass "Detected ${rh_info} ($(uname -m))" "Distribution"
+    else
+        warn "Could not detect distribution" "Distribution" \
+            "Check /etc/os-release" "Check /etc/os-release"
+    fi
+
+    # 4. Outbound connectivity — region-neutral TCP-connect reachability check.
+    #    The collector is region-specific and speaks a non-HTTP protocol, so we
+    #    don't probe it here (region isn't known until later in the flow). This
+    #    is a pre-flight sanity check that outbound HTTPS works at all; the real
+    #    collector host/port (6443, or 443 for -alt regions) is verified after
+    #    install by the backend-connectivity check in host-shield.md §8.
+    if command -v curl &>/dev/null; then
+        if curl -sf --connect-timeout 5 -o /dev/null "https://sysdig.com"; then
+            pass "Outbound HTTPS reachable (collector host/port verified post-install)" "Connectivity"
+        else
+            fail "No outbound HTTPS connectivity to sysdig.com" "Connectivity" \
+                "Check firewall or proxy settings" "Check firewall or proxy settings"
+        fi
+    else
+        warn "curl not found — cannot check outbound connectivity" "Connectivity" \
+            "brew install curl" "apt install curl"
+    fi
+
+    # 5. Disk space (agent needs ~500MB)
+    local avail_kb
+    avail_kb=$(df -k /opt 2>/dev/null | tail -1 | awk '{print $4}')
+    if [[ -n "$avail_kb" ]] && [[ "$avail_kb" =~ ^[0-9]+$ ]]; then
+        local avail_mb=$((avail_kb / 1024))
+        if [[ "$avail_mb" -lt 500 ]]; then
+            warn "/opt has ${avail_mb}MB free — agent needs ~500MB" "Disk" \
+                "Free disk space" "Free disk space"
+        else
+            pass "/opt has ${avail_mb}MB free (agent needs ~500MB)" "Disk"
+        fi
+    fi
+
+    # 6. Existing agent detection. The `draios-agent` package registers the
+    #    `dragent` unit; Docker installs have no unit, so the config-file check
+    #    below catches those.
+    if systemctl is-active dragent &>/dev/null; then
+        warn "dragent service is already running — this will be an upgrade, not fresh install" "Existing Agent" \
+            "" ""
+    elif [[ -f /opt/draios/etc/dragent.yaml ]]; then
+        warn "Existing config found at /opt/draios/etc/dragent.yaml — previous install detected" "Existing Agent" \
+            "" ""
     fi
 }
 
@@ -321,6 +421,7 @@ TYPE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --json) JSON_MODE=true ;;
+        --blockers) BLOCKERS_MODE=true ;;
         --aws-profile)
             shift
             AWS_PROFILE_ARG="${1:-}"
@@ -345,7 +446,12 @@ if [[ -n "$AWS_PROFILE_ARG" ]]; then
     export AWS_PROFILE="$AWS_PROFILE_ARG"
 fi
 
-if [[ "$JSON_MODE" != "true" ]]; then
+if [[ "$JSON_MODE" == "true" && "$BLOCKERS_MODE" == "true" ]]; then
+    echo "Error: --json and --blockers are mutually exclusive"
+    exit 1
+fi
+
+if [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]]; then
     echo "========================================"
     echo " Sysdig Onboarding Prerequisites Check"
     echo " Type: ${TYPE}"
@@ -357,17 +463,21 @@ case "$TYPE" in
     aws)
         check_terraform
         check_aws
+        check_utils
         ;;
     gcp)
         check_terraform
         check_gcp
+        check_utils
         ;;
     azure)
         check_terraform
         check_azure
+        check_utils
         ;;
     kubernetes)
         check_kubernetes
+        check_utils
         ;;
     host)
         check_host
@@ -379,7 +489,27 @@ case "$TYPE" in
         ;;
 esac
 
-if [[ "$JSON_MODE" == "true" ]]; then
+if [[ "$BLOCKERS_MODE" == "true" ]]; then
+    # Render the exact user-facing blocker block the skill prescribes.
+    # Agents display this verbatim — do not change the format.
+    if [[ ${#BLOCK_NAMES[@]} -eq 0 ]]; then
+        echo "All prerequisites passed."
+    else
+        echo "Prerequisites missing — blocking:"
+        i=0
+        while [[ $i -lt ${#BLOCK_NAMES[@]} ]]; do
+            echo ""
+            echo "❌ ${BLOCK_NAMES[$i]} — ${BLOCK_DETAILS[$i]}"
+            if [[ -n "${BLOCK_FIXES[$i]}" ]]; then
+                echo ""
+                echo "Fix: ${BLOCK_FIXES[$i]}"
+            fi
+            i=$((i + 1))
+        done
+        echo ""
+        echo "Once all are resolved, reply \"ready\" and I'll re-run the checks."
+    fi
+elif [[ "$JSON_MODE" == "true" ]]; then
     profile_json=""
     [[ -n "$AWS_PROFILE_ARG" ]] && profile_json="$(printf ',"aws_profile":"%s"' "$AWS_PROFILE_ARG")"
     printf '{"type":"%s"%s,"checks":[%s],"summary":{"pass":%d,"fail":%d}}\n' \

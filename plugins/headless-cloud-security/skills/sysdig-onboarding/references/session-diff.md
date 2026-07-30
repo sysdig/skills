@@ -12,9 +12,9 @@ before the first wizard panel. This gives returning users instant context.
 **Examples:**
 
 ```
-**Previous session:** AWS 123456789012, Connection + Cloud Logs + Scanning, us1
-**Previous session:** GCP my-project-123, Connection, eu1
-**Previous session:** Azure sub-abc123, Connection + Cloud Logs, us2
+**Previous session:** AWS 123456789012, Foundational + Threat Detection + Host Scanning, us1
+**Previous session:** GCP my-project-123, Foundational, eu1
+**Previous session:** Azure sub-abc123, Foundational + Threat Detection, us2
 ```
 
 For multiple accounts in `environment.yaml`:

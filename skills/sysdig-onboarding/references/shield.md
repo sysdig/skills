@@ -10,6 +10,7 @@
 6. [Helm Installation & Verification](#6-helm-installation)
 7. [Values Configuration](#7-values-configuration)
 8. [Distribution-Specific Notes](#8-distribution-specific-notes)
+   - [Windows Nodes (Kubernetes DaemonSet)](#windows-nodes-kubernetes-daemonset)
 9. [Troubleshooting](#9-troubleshooting)
 
 ---
@@ -222,7 +223,7 @@ All features are configured under `features.*` in `values.yaml`.
 | **Live Logs** | Host | `features.investigations.live_logs.enabled` | `false` | Stream container logs in Sysdig UI |
 | **Network Security** | Host | `features.investigations.network_security.enabled` | `false` | Network policy generation and enforcement |
 | **Captures** | Host | `features.investigations.captures.enabled` | `false` | System call capture for forensics |
-| **Rapid Response** | Host | `features.respond.rapid_response.enabled` | `false` | Live container investigation shell |
+| **Rapid Response** | Host | `features.respond.rapid_response.enabled` | `false` | Live container investigation shell — **requires a password** (see note below §5.2) |
 | **Response Actions** | Host | `features.respond.response_actions.enabled` | `false` | Automated response to threats |
 
 ### 5.2 Profile → Feature Mapping
@@ -245,6 +246,20 @@ All features are configured under `features.*` in `values.yaml`.
 | rapid_response + response_actions | — | — | Yes |
 | captures | — | — | Yes |
 
+> **Rapid Response requires a password (do not skip).** Whenever
+> `features.respond.rapid_response.enabled: true` — which the **Full
+> Protection** profile turns on — the chart needs
+> `features.respond.rapid_response.password` set. If it is empty, the Rapid
+> Response subprocess crash-loops (`Flag "password" cannot be empty`) and the
+> Host Shield pod never becomes Ready (stuck 0/1), even though the agent
+> authenticates and sends metrics fine. When Rapid Response is enabled, keep
+> the `password` placeholder in `values.yaml` and have the **user edit that
+> line in the file directly** — same discipline as `sysdig_endpoint.access_key`
+> (never ask for it in chat, never pass it via `--set`). It is an operator
+> passphrase the user chooses, **not** the Agent Access Key. For production,
+> prefer a pre-created Secret via `password_existing_secret` instead of the
+> inline value.
+
 ---
 
 ## 6. Helm Installation
@@ -257,6 +272,12 @@ helm repo update
 ```
 
 ### Install
+
+> **Before installing:** the user must have replaced the
+> `access_key` placeholder in `values.yaml` with their Agent Access Key by
+> editing the file (see §7.2). Do not pass the key via `--set` or an env var —
+> it must live in `values.yaml`, which `-f` reads. Confirm the placeholder is
+> gone before running the install.
 
 ```bash
 helm upgrade --install --create-namespace \
@@ -390,6 +411,25 @@ auto-configures the collector host and API URL. No manual `collector.host` or
 `api_url` needed for SaaS deployments. For on-prem, set `region: custom` and
 provide `api_url` and `collector.host`/`collector.port` explicitly.
 
+> **Agent Access Key — how it gets filled (do not improvise).** Leave
+> `access_key` as the literal `REPLACE_WITH_YOUR_SYSDIG_AGENT_ACCESS_KEY`
+> placeholder in the generated `values.yaml`. **The user edits that one line
+> in the file directly** (Agent Access Key from Sysdig UI → Settings → Agent
+> Keys). `values.yaml` is the user's local, git-ignored config file — the same
+> handling model as `.sysdig-token`, so keeping the key in the file is correct
+> and expected. After they save the file, install with `-f values.yaml`.
+>
+> Do **NOT**:
+> - ask the user to paste or type the key into the chat;
+> - pass the key via `helm --set sysdig_endpoint.access_key=...`;
+> - ask the user to `! export SYSDIG_AGENT_ACCESS_KEY=...` and reference `$SYSDIG_AGENT_ACCESS_KEY`.
+>
+> The `! export` / `--set` route **does not work**: `!`-prefixed commands run
+> in the user's interactive shell, but each agent Bash tool call runs in a
+> fresh, separate subshell that does **not** inherit that environment — so the
+> variable is empty by the time Helm reads it. Editing the placeholder in the
+> file is the only reliable path.
+
 ### 7.3 Features
 
 All under `features.*`. See the Feature Reference table (§5) for the full list.
@@ -501,6 +541,183 @@ host:
     cri:
       socket_path: /run/k3s/containerd/containerd.sock
 ```
+
+---
+
+### Windows Nodes (Kubernetes DaemonSet)
+
+Windows Host Shield ships **only** as a Kubernetes DaemonSet that runs on
+Windows worker nodes in a mixed (Linux + Windows) cluster. There is **no
+standalone / MSI installer** — if a node is not part of a Kubernetes cluster,
+it cannot be protected by this component. The Windows DaemonSet is delivered by
+the **same `sysdig/shield` Helm chart** as the Linux components and is
+configured through the same `values.yaml`, under a dedicated `host_windows:`
+block. The Linux `host:` block does not govern Windows nodes.
+
+#### Enablement, image, and scheduling
+
+```yaml
+host_windows:
+  enabled: true                       # off by default; turns on the Windows DaemonSet
+  image:
+    registry: quay.io
+    repository: sysdig
+    name: host-shield                 # full ref: quay.io/sysdig/host-shield:0.17.0
+    tag: "0.17.0"                      # overridable
+    pull_policy: IfNotPresent
+  node_selector:
+    "kubernetes.io/os": windows        # only schedules on Windows nodes
+```
+
+- **Image:** `quay.io/sysdig/host-shield`, default tag `0.17.0` (overridable via
+  `host_windows.image.tag`). This is a different image from the Linux Host
+  Shield (`agent-slim` / `agent-kmodule`).
+- **nodeSelector:** `kubernetes.io/os: windows` (default; merged with the global
+  `node_selector`).
+- **Affinity:** the chart hard-pins the pods to **amd64 Windows nodes** via a
+  required `nodeAffinity` matching `kubernetes.io/arch: amd64` **and**
+  `kubernetes.io/os: windows`. There is no ARM64 Windows support.
+- **Tolerations:** a default toleration for the `os=Windows:NoSchedule` taint is
+  included, so the DaemonSet schedules onto tainted Windows pools out of the
+  box.
+
+#### HostProcess container / securityContext
+
+The Windows DaemonSet runs as a **Windows HostProcess container**. The pod
+`securityContext` is fixed by the chart:
+
+```yaml
+securityContext:
+  windowsOptions:
+    hostProcess: true
+    runAsUserName: "NT AUTHORITY\\SYSTEM"
+hostNetwork: true
+```
+
+This requires a Windows node OS / containerd that supports HostProcess
+containers. `hostNetwork: true` is mandatory.
+
+#### Config, secret, and CA mount paths
+
+Windows uses Windows-style (relative) mount paths rather than Linux absolute
+paths. The agent config file is **`host-shield.yaml`** (same `features.*` tree
+as Linux), rendered into a ConfigMap and mounted as follows:
+
+| Content | Volume source | Mount path (in container) |
+|---------|---------------|---------------------------|
+| `host-shield.yaml` config | ConfigMap (`<release>-host-windows`) | `Sysdig/Shield/Config` |
+| Agent Access Key | Secret (see Auth below) | `Sysdig/Shield/Secrets/AccessKey` |
+| Custom CA certificates | Secret/ConfigMap (when configured) | `Sysdig/Shield/certificates/` |
+
+The `host-shield.yaml` config carries `cluster_config.name`, the
+`sysdig_endpoint` block (see Endpoint), `ssl`, and the (restricted) `features`
+tree described below.
+
+#### Feature restriction — only two features render on Windows (critical)
+
+The Windows ConfigMap template builds its `features` block by `pick`-ing only:
+
+- `posture.host_posture`
+- `vulnerability_management.host_vulnerability_management` (plus the sibling
+  `vulnerability_management.in_use` block)
+
+**Every other feature is silently dropped.** Detections (drift, malware, FIM,
+K8s audit), investigations (activity audit, live logs, network security,
+captures), respond (rapid response, response actions), admission control,
+cluster/container features, and all Monitor features do **not** render on
+Windows — even if you set their `enabled: true`. No error is raised; the keys
+are simply ignored. When onboarding Windows nodes, enable **only**:
+
+```yaml
+features:
+  posture:
+    host_posture:
+      enabled: true
+  vulnerability_management:
+    host_vulnerability_management:
+      enabled: true
+```
+
+Leave all other feature toggles off for Windows — they are no-ops there.
+
+#### Authentication — Agent Access Key (same as Linux/K8s)
+
+Windows reuses the exact same credential as the Linux/K8s components: the
+**Agent Access Key**. The DaemonSet mounts the secret named by
+`common.credentials.access_key_secret_name` (i.e. the same secret the rest of
+the chart uses, derived from `sysdig_endpoint.access_key` /
+`common.credentials.*`). There is no Windows-specific key. As on Linux, this is
+**not** the Secure API Token.
+
+#### Health checks — `/healthz` on the monitoring port
+
+Liveness and readiness probes both issue `GET http://127.0.0.1/healthz` against
+`host_windows.additional_settings.monitoring_port` (**default `8081`**):
+
+```yaml
+host_windows:
+  additional_settings:
+    monitoring_port: 8081             # /healthz port for liveness & readiness
+```
+
+(`initialDelaySeconds: 60`; liveness `periodSeconds: 30`; both `timeoutSeconds: 10`.)
+
+#### Endpoint and the alt-region port-443 note
+
+Endpoint values come from the shared `sysdig_endpoint` block — the Windows
+config whitelists `region`, `api_url`, and `collector`. For named SaaS regions
+this resolves automatically, the same way as Linux.
+
+For **alt-regions**, the Windows template handles the collector port
+differently from Linux: when the image tag does **not** support alt-regions
+natively (image tags `<= 0.7.1`), the template rewrites the endpoint to
+`region: custom`, sets `api_url`/`collector.host` explicitly, and forces
+`collector.port: 443` — whereas the Linux default collector port is `6443`.
+With the current default image tag (`0.17.0`, which supports alt-regions), this
+rewrite is skipped and the standard region resolution applies; the port-443
+fallback only matters when pinning an old (`<= 0.7.1`) Windows image.
+
+#### Verification — Windows DaemonSet pod label selector
+
+The Windows DaemonSet's pod **selector labels** (from
+`host.windows.selector_labels`) are:
+
+| Label | Value |
+|-------|-------|
+| `sysdig/component` | `host` |
+| `app.kubernetes.io/name` | `shield` |
+| `app.kubernetes.io/instance` | `<Helm release name>` (e.g. `sysdig`) |
+
+The `sysdig/component-version` label is present on the workload/pod labels but
+is explicitly **removed from the selector**. The DaemonSet resource name is
+`<release>-host-windows` (e.g. `sysdig-host-windows`).
+
+> **Heads-up:** `sysdig/component=host` is the **same** component label the
+> Linux Host Shield uses. To target *only* the Windows pods, also filter on the
+> Windows OS node label. Recommended verification command:
+
+```bash
+# Windows Host Shield pods only (DaemonSet on Windows nodes):
+kubectl get pods -n sysdig-agent \
+  -l sysdig/component=host,app.kubernetes.io/name=shield \
+  --field-selector spec.nodeName!="" \
+  -o wide | grep -i win   # or scope by node: kubectl get nodes -l kubernetes.io/os=windows
+
+# Or address the DaemonSet directly:
+kubectl get ds -n sysdig-agent sysdig-host-windows
+```
+
+For health, exec/port-forward and hit `http://127.0.0.1:8081/healthz` inside a
+Windows pod, or rely on the readiness probe (`READY` count on the DaemonSet).
+Only **host posture** and **host vulnerability** data will appear in Sysdig for
+Windows nodes — there is no runtime/threat, network, or investigation telemetry
+from the Windows DaemonSet.
+
+> This limitation is specific to the Kubernetes DaemonSet delivery. The
+> standalone MSI install for Windows *servers* covers a wider feature set (see
+> https://docs.sysdig.com/en/sysdig-secure/windows-host/); this skill does not
+> generate that configuration, so do not tell the user Windows threat detection
+> is unavailable — say the DaemonSet path does not carry it.
 
 ---
 

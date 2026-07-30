@@ -44,6 +44,23 @@ consumed without prior context about the deployment.
   1. Review the failed checks — each lists the specific IAM action needed.
   2. Generate `generated/sysdig-required-policy.json` with the minimum IAM
      policy needed for onboarding.
+     - **Tag companions are required.** The Sysdig modules create IAM
+       policies, CloudFormation StackSets, EventBridge rules, SQS queues,
+       and KMS keys **with tags**, and AWS requires the matching `*:Tag*`
+       action alongside each `Create*` (e.g. `iam:CreatePolicy` +
+       `iam:TagPolicy`; `cloudformation:CreateStackSet` +
+       `cloudformation:TagResource`; also `events:TagResource`,
+       `sqs:TagQueue`, `kms:TagResource`). The published AWS permissions
+       reference does **not** enumerate these tag actions, so include the
+       `Tag*` companion of every `Create*` even if it is not listed there —
+       omitting it makes `terraform apply` fail with `AccessDenied` on the
+       tag action while the pre-flight (which now probes them) is the only
+       repo source that lists them.
+     - **For clean offboarding, also add the `*:Untag*` companions**
+       (`iam:UntagPolicy`, `cloudformation:UntagResource`, …). The apply
+       pre-flight does not test these — creating a tagged resource needs
+       only `Tag*` — but `terraform destroy` removes the tags and will fail
+       without them.
   3. Attach the policy to the IAM identity and re-run
      `check_permissions.sh`.
 - **Recovery from a partial apply:** Terraform creates resources
@@ -206,6 +223,6 @@ failures:
 4. Check Sysdig > Vulnerabilities for runtime scan results
 
 ### Linux Hosts
-1. `systemctl status sysdig-agent` — active (running)
-2. `journalctl -u sysdig-agent --since "5 min ago"` — no errors
+1. `systemctl status dragent` — active (running)
+2. `journalctl -u dragent --since "5 min ago"` — no errors
 3. Check Sysdig > Integrations > Hosts for the host

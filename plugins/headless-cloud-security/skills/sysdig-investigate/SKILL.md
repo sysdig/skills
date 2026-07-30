@@ -1,16 +1,18 @@
 ---
 name: sysdig-investigate
 description: >
-  Investigate vulnerable images in a Sysdig-monitored environment. Fetches and ranks
-  images by a chosen risk metric (finding_count, exposure_time_weighted,
-  exposure_time_avg, sla_compliance, or actually_exploitable_findings), builds a
-  remediation plan, optionally creates a tracking ticket (Jira / Linear / GitHub
-  Projects) using Sysdig-side signals to determine the assignee, and hands off
-  to /sysdig-remediate.
-  Triggers on: "investigate", "what should I fix", "show me vulnerable images",
-  "prioritize vulnerabilities", "/sysdig-investigate".
-  Not for opening PRs, applying code fixes, or generating Dockerfile patches —
-  use /sysdig-remediate for that.
+  Investigate and prioritize vulnerable images in a Sysdig-monitored environment via two
+  flows, routed from the user's goal. Plans flow — plan-driven prioritization: pick an
+  admin-configured Plan (or explore ranked jobs under an ad-hoc scope and measure) and
+  walk the prioritized remediation jobs one at a time. Findings flow — ad-hoc findings
+  analysis: filter, regroup, sort, and page vulnerability findings the way the
+  Vulnerability Management UI table does. Hands any chosen image off to /sysdig-remediate,
+  which owns tickets, PRs, job tracking, and job closing.
+  Triggers on: "investigate", "what should I fix", "what should I fix first", "show me my
+  vulnerable images", "prioritize vulnerabilities", "which images are affected by
+  CVE-...", "show me all Critical CVEs in production", "/sysdig-investigate".
+  Not for opening PRs, applying fixes, or creating/updating tickets — use
+  /sysdig-remediate for all of those.
 allowed-tools:
   - AskUserQuestion
   - Read
@@ -21,15 +23,20 @@ allowed-tools:
   - mcp__secure-mcp-server__delete_skill_state
   - mcp__secure-mcp-server__list_plans
   - mcp__secure-mcp-server__list_plan_remediation_jobs
+  - mcp__secure-mcp-server__get_plan_target_measure
+  - mcp__secure-mcp-server__list_plan_categories
+  - mcp__secure-mcp-server__list_plan_category_measures
   - mcp__secure-mcp-server__list_zones
-  - mcp__secure-mcp-server__list_vulnerability_findings_by_image
-  - mcp__secure-mcp-server__list_candidate_remediation_jobs
+  - mcp__secure-mcp-server__query_vulnerability_findings
+  - mcp__secure-mcp-server__explore_jobs
+  - mcp__secure-mcp-server__get_job_impact
+  - mcp__secure-mcp-server__list_artifacts
+  - mcp__secure-mcp-server__list_plan_activities
+  - mcp__secure-mcp-server__create_artifact
+  - mcp__secure-mcp-server__list_scope_labels
+  - mcp__secure-mcp-server__list_scope_label_values
   - mcp__secure-mcp-server__run_sysql
-  - mcp__secure-mcp-server__create_plan
-  - mcp__atlassian__searchJiraIssuesUsingJql
-  - mcp__atlassian__createJiraIssue
-  - mcp__atlassian__editJiraIssue
-  - mcp__atlassian__addCommentToJiraIssue
+version: 1.0.1
 ---
 
 ## First-run notice (Public Beta)
@@ -47,15 +54,28 @@ Before doing any other work for this skill, perform this one-time check:
 
 When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
 
-Investigate vulnerable images in a Sysdig-monitored environment in four phases: **discover** the candidates (existing plan when `sage.next` is enabled, or zone-based search on the legacy path), **prioritize** by a focus metric, **optionally ticket** them in your tracker, and **hand off** to `/sysdig-remediate` for the fix. This skill **never opens PRs or applies fixes** — that work lives in `/sysdig-remediate`.
+This skill **investigates and prioritizes — it never remediates**. It has two flows, chosen in step 1 from the user's goal:
 
-> **To apply the fix, run `/sysdig-remediate` after this skill hands off.**
-> `/sysdig-remediate` resolves safe fix versions, opens a PR/MR, and updates the linked ticket on completion.
+**Plans flow — plan-driven prioritization.** Work through ranked remediation jobs, either from an existing admin-configured Plan or from a free investigation (`explore_jobs` under a custom scope and measure). Jobs are walked one at a time; each job's outcome is a handoff to `/sysdig-remediate`, a skip, or stopping the session.
+
+**Findings flow — ad-hoc findings analysis.** Mirrors the Vulnerability Management UI table: an iterative filter / regroup / sort / page loop over `query_vulnerability_findings`. Use it when the user has a slicing question ("show me all Critical CVEs with a fix in production") rather than a backlog to work through.
+
+**Boundaries.** This skill never creates or updates tickets, never opens PRs, never calls `track_job`, and never calls `close_job`. All deliverables — the ticket, the PR, job tracking at the commit point, and closing the job once work is filed — live in `/sysdig-remediate`. The goal of a session here is a prioritized understanding and clean handoffs, not deliverables.
+
+> **To act on an image, hand off to `/sysdig-remediate`.** It asks whether the user wants
+> a ticket, a PR, or both; deduplicates existing work (artifacts, Sysdig-created tickets,
+> external tickets and PRs); resolves safe fix versions; and closes the job once the work
+> is filed.
 
 ## Conversation rules
 
-- **Narrate before every tool call.** Before invoking any tool, say what you're about to do and which tool you're using. No silent calls.
+- **Narrate high-level actions, not individual tool calls.** Say what you are doing at a meaningful level ("loading plan details", "querying findings grouped by image") — do not announce every tool call by name, and do not ask permission for obvious next steps in the flow. Silent tool calls with no user-facing context are not acceptable; narrating every micro-step is also not acceptable.
 - **Announce every skill handoff.** Before invoking another skill, name it explicitly and summarize what it'll do, then wait for confirmation.
+- **Internal identifiers stay internal.** Never surface configuration keys (like the customer-settings flag read in step 0a), raw `target_measure` ids, or `global_id`s in user-facing messages — translate them into plain language ("plan-driven prioritization isn't enabled for this tenant", the measure's display name, the image reference).
+- **Plans free path only — always discover measures and scopes live, never read them from skill text.** These rules apply on the free investigation path (`explore_jobs`). On the Plan path, scope and measure are already defined by the plan — skip discovery entirely. When any question about available measures, categories, scopes, zones, or label values arises on the free path, call the relevant tools (`list_plan_categories`, `list_plan_category_measures`, `list_zones`, `list_scope_labels`, `list_scope_label_values`) to get the current data. The static lists in this skill are last-resort fallbacks only.
+- **Plans free path only — propose, don't list.** Use the conversation context to infer what the user cares about (environment, team priorities, risk posture, urgency) and suggest the single most fitting measure and scope with a one-line rationale. Let the user confirm or redirect — don't present a neutral menu and wait.
+- **Plans free path only — zone-first for scope.** If the customer has zones configured, always propose a zone as the primary scope. Zones are the semantically meaningful groupings in Sysdig (e.g. production, staging) and give the most actionable signal. Offer label-based narrowing (namespace, cluster, workload) as a follow-up refinement, not the primary choice. If no zones are configured, fall through to label-based scoping.
+- **Findings flow only — one slice at a time.** After each result table, propose the single most useful next move (narrow, pivot the grouping, re-sort, page, or hand an image off) based on what the data actually shows — don't enumerate every possible refinement each turn.
 
 ## State
 
@@ -67,7 +87,7 @@ Read state via `get_skill_state`, write via `save_skill_state`. Schema and rules
 
 **Always present this before asking any questions.** See [references/trust-preamble.md](references/trust-preamble.md) for the full text. After presenting the preamble, proceed directly to step 0a — do not ask for confirmation.
 
-### 0a. Prerequisites and routing
+### 0a. Prerequisites
 
 **MCP authentication preflight.** Before any other step, run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. If it tells you to abort, abort — do not call any MCP tools or perform other side effects.
 
@@ -75,308 +95,257 @@ If a tool call later fails during normal operation, use the diagnostic checklist
 
 Do not proceed until the MCP server is reachable.
 
-**Route on `sage.next.enabled`.** From the same `get_customer_settings` response, read the `sage.next.enabled` flag:
+Once the preflight passes, call `get_customer_settings` and note the `sage.next.enabled` flag — step 1 uses it: the Plans flow requires it; the Findings flow does not. Note it silently — do not mention the flag name or the settings payload to the user.
 
-- If **true** → continue to step 1 (plan-based hot path).
-- If **false** → jump to step 1L (legacy fallback).
+### 1. Goal routing
 
-### 1. Plan-based flow — pick an existing plan or start fresh
+Classify the user's goal from what they've said so far, announce the route in one line, and proceed. Ask only when genuinely ambiguous.
 
-**a. List existing plans.** Using the tool `list_plans`, check if there are existing plans the company is working on. A **plan** is a tracked set of **remediation jobs** (one job per image to fix) within a chosen scope — one or more **zones** (groups of resources sharing a policy, e.g. production or staging) — and a chosen `target_measure`. Present the plans to the user and ask whether they'd like to work on one of them, or "none of these — start a free investigation."
+| Signal | Route |
+|---|---|
+| Backlog / plan / prioritization language: "what should I fix first", "work through the backlog", "prioritize", mentions of Plans, jobs, SLA, remediation campaigns | **Plans flow** (step 2) |
+| Ad-hoc slicing language: "show me all …", "which images are affected by CVE-…", "filter by …", "group by …", questions about a specific CVE, package, namespace, or cloud account | **Findings flow** (step 3) |
+| Bare `/sysdig-investigate` or "investigate" with no other signal | Genuinely ambiguous — ask |
 
-**b. Branch on the user's choice.**
-- If the user picks an existing plan → fetch and present its images using `list_plan_remediation_jobs` with the selected `plan_id`, then jump to step 4a.
-- If the user picks "none" → proceed to step 2 (zones) for a free investigation.
+**Announce, don't interrogate.** When the signal is clear, state the route and keep moving, e.g.:
 
-### 1L. Legacy fallback (only when `sage.next.enabled` is false)
+> _"This sounds like plan-driven prioritization — I'll start from your remediation Plans. (Say 'ad-hoc' if you'd rather slice the findings directly.)"_
 
-Refer to [zones](references/zones.md) to fetch user available zones.
-Ask the user to pick a zone. Always include a zone "Entire Infrastructure" (no zone).
+or
 
-Then, using the tool `list_vulnerability_findings_by_image` and the user-selected zones IDs, fetch the 10 most vulnerable images. Zone IDs must be placed in the tool param `zoneId_in`.
+> _"This is an ad-hoc findings question — I'll query the findings directly. (Say 'plans' if you'd rather work through your remediation backlog.)"_
 
-After listing, tell the user how much they're seeing. If the API response includes a total count, print _"Showing top 10 of N — say 'more' to expand or describe a filter."_; otherwise print _"Showing the top 10. Say 'more' to fetch additional results or 'filter' to narrow."_ When the user says "more", re-call `list_vulnerability_findings_by_image` with a higher `limit`.
+**When genuinely ambiguous**, ask one question (AskUserQuestion) with exactly two options: work through the prioritized remediation backlog (Plans) vs. explore/slice the findings data (Findings).
 
-Ask: _"Which of these would you like to remediate? (say 'all', pick numbers, or describe a filter)"_
-Skip to step 5.
+**Gate on `sage.next.enabled`:** if the Plans flow is chosen but the flag is false, tell the user plan-driven prioritization isn't enabled for this tenant and continue with the Findings flow instead. Never name the flag itself in the conversation — it's an internal setting key; the plain-language message is the user-facing form.
 
-### 2. Discover zones
+### 2. Plans flow
 
-Refer to [zones](references/zones.md) to fetch user available zones.
-Ask the user to pick a zone. Always include a zone "Entire Infrastructure" (no zone).
-Please, use the zone ID and not the zone name passing the choice to other tools.
+#### 2a. Pick an existing plan or start fresh
 
-### 3. Choose focus
+Call `list_plans` to check if there are existing plans. Present them as a short table — plan name, zones, and the measure's **display name** with its one-line explainer — and ask whether they'd like to work on one, or "none of these — start a free investigation." Resolve measure display names via `list_plan_categories` + `list_plan_category_measures` (one pass covers every plan in the table); never show raw `target_measure` ids like `exposure_time_weighted` in the table.
 
-Ask the user what they want to focus on:
+- If the user picks an existing plan → present the plan overview (step 2b), then jump to step 2d.
+- If the user picks "none" (or no plans exist) → free investigation: proceed to step 2c.
 
-> "What would you like to investigate?"
-> 1. **Most CVEs** (`finding_count`) — total distinct CVE+package findings.
-> 2. **Longest exposure** (`exposure_time_weighted`) — older findings weigh more.
-> 3. **Average age** (`exposure_time_avg`) — average age of Critical+High findings.
-> 4. **SLA risk** (`sla_compliance`) — ranks by oldest-bucket age vs. SLA threshold (as computed by Sysdig).
-> 5. **Actually exploitable** (`actually_exploitable_findings`) — in-use AND network-reachable.
+#### 2b. Plan overview (Plan path only)
 
-Map the user's choice to the `target_measure` parameter (the parenthetical above).
+Present the plan overview in this structure before showing the jobs table. Build it from live tool calls:
 
-### 4. Fetch and present images
+**1 — Hero.** Plan title, measure display name and one-line explainer (from `list_plan_category_measures` for the plan's `target_measure`), owner if present. Never show the raw `target_measure` id — only the human-readable display name.
 
-Call `list_candidate_remediation_jobs` with:
-- `target_measure`: the selected target_measure
-- `scope`: a JSON like { zones: [<user selected zone ids>] }
+**2 — What this measures.** A concise explanation of what the measure means and why it matters, derived from `list_plan_category_measures`. Do not read this from skill text.
+
+**3 — Scope.** Zones covered by the plan, from the plan data.
+
+**4 — Current state.** Current measure value and trend from `get_plan_target_measure`. Format: _"Current value: X — as of `<date>`."_ Include trend direction if available: _"down −Y vs `<prev_date>` — good for this measure."_
+
+**5 — Past session context.** Call both in parallel:
+- `list_artifacts(parent_kind: "plan", parent_id: <plan_id>)` — work products and session notes attached to the plan and its jobs
+- `list_plan_activities(plan_id: <plan_id>)` — the audit event timeline: when jobs changed state, when artifacts were attached, when jobs were added to the plan
+
+Synthesize into a brief summary before the jobs table. Examples:
+- _"From a previous session (2026-06-05): 2 jobs handed to `/sysdig-remediate`, tickets PROJ-12 and PROJ-13 filed."_ (from note artifacts + `artifact_attached` events)
+- _"Job `quay.io/org/svc:2.0` was closed on 2026-06-04."_ (from `job_state_changed` events — skip it in the jobs table)
+
+Skip silently if no artifacts or activities exist.
+
+**6 — Top job** (present this block only after the step 2d fetch — it needs the ranked jobs). _"The riskiest jobs have already been ranked by impact. Right now the top job is `<image>`, which `<ranking_summary>`."_
+
+#### 2c. Free path — discover scope and measure
+
+**Scope.** Refer to [zones](references/zones.md) to fetch the user's available zones.
+
+- If zones are configured: propose the most relevant zone based on the conversation context (e.g. if the user mentioned "prod" or "production", suggest the matching zone). Always include "Entire Infrastructure" (no zone filter) as an alternative. Pass the zone ID — never the zone name — to downstream tools.
+- If no zones are configured: fall through to label-based scoping — call `list_scope_labels` to discover available dimensions (namespace, cluster, workload, etc.) and `list_scope_label_values` to enumerate valid values. Propose the narrowest scope that matches what the user described.
+- In either case, offer label-based rules as additional narrowing on top of the zone if the user wants to focus further (e.g. a specific namespace within production).
+
+**Measure.** Call `list_plan_categories` to discover the categories supported by this tenant. For each category, call `list_plan_category_measures` to get its compatible `target_measure` values. **Do not present the full list and ask the user to pick.** Read the conversation context and propose the single most fitting measure with a one-line rationale — by its **display name** and explainer from `list_plan_category_measures`. The backticked ids below are the `target_measure` values you pass to tools, never the words you show the user. Examples:
+
+- "what can we fix today" or "exploitable" → propose `fixable_exposed_findings`
+- "we've had these vulnerabilities for months" or "exposure" → propose `exposure_time_weighted`
+- "SLA" or "compliance deadline" → propose `sla_compliance`
+- No strong signal → propose `findings` as a broad starting point and explain why
+
+Confirm with the user before proceeding. If they redirect, adjust without re-presenting the full list unless they ask for it.
+
+**Static fallback** (only if `list_plan_categories` and `list_plan_category_measures` both fail — present the plain-language descriptions below, not the ids):
+- `findings` — total distinct CVE+package findings
+- `exposure_time_weighted` — age-weighted sum; older findings weigh more
+- `exposure_time_avg` — average age of Critical+High findings
+- `sla_compliance` — urgency based on oldest-bucket age vs. SLA threshold
+- `fixable_exposed_findings` — in-use, network-reachable, AND has a fix available
+
+Map the confirmed choice to the `target_measure` parameter.
+
+#### 2d. Fetch and present the ranked jobs
+
+**Plan path:** call `list_plan_remediation_jobs` for the selected plan, filtered to `states: ["open", "in_progress"]` — never surface closed or archived jobs.
+
+**Free path:** call `explore_jobs` with:
+- `target_measure`: the confirmed measure from step 2c
+- Scope: build from the confirmed scope in step 2c.
+  - **For zone-based scoping use the top-level `zone_ids: number[]` convenience field** — the server resolves these to ZoneFilters internally. Do NOT place raw zone IDs inside `scope.zones`, which expects structured `ZoneFilter` objects (`[{ ref_id, snapshot_rules }]`) and 422s on integers.
+  - For label-based narrowing, use `scope.raw` rules (`{ operator, rules: [{ key, op, value }] }`); can be layered on top of `zone_ids`.
+  - Never hard-code scope values — always use IDs and label values discovered via the live tools.
+- `states`: `["open", "in_progress"]`
 - `limit`: `10`
 
-If the result is empty, tell the user there are no matching vulnerabilities in that
-environment and stop.
+If the result is empty, tell the user there are no matching vulnerabilities in that environment and stop.
 
-### 4a. Fetch and present images
+Each `explore_jobs` row carries a `tracked: bool` field:
+- `tracked: true` — a persisted Job already in the catalog (Plan-path jobs are always tracked).
+- `tracked: false` — a virtual candidate computed on-the-fly. **Do not promote it** — `track_job` belongs to `/sysdig-remediate`, which calls it only at its commit point (when the user confirms a deliverable).
 
-Present the results as a ranked table, sorted by internet-exposed first, then by
-severity score descending:
+Present the results as a ranked table, **preserving the tool's row order** — the rows are already ranked by the measure; re-sorting would change which job is "the top one":
 
-| # | Image | Ranking Summary | Finding Percentage | Finding Count | Resource Count
-|---|-------|--------|--------------------|---------------|
-| 1 | quay.io/org/app:1.2 | 9 actually exploitable findings | 30% | 17 | 23
-| 2 | quay.io/org/svc:2.0 | 16 actually exploitable findings | 12% | 43 | 44
+| # | Image | Tracked | Ranking Summary | Finding Percentage | Finding Count | Resource Count |
+|---|-------|---------|--------|--------------------|---------------|----------------|
+| 1 | quay.io/org/app:1.2 | Yes | 9 fixable+exposed findings | 30% | 17 | 23 |
+| 2 | quay.io/org/svc:2.0 | No  | 16 fixable+exposed findings | 12% | 43 | 44 |
 
-After the table, tell the user how much they're seeing. If the API response includes a total count, print _"Showing top 10 of N — say 'more' to expand or describe a filter."_; otherwise print _"Showing the top 10. Say 'more' to fetch additional results or 'filter' to narrow."_ When the user says "more", re-call `list_candidate_remediation_jobs` with a higher `limit`.
+After the table, tell the user how much they're seeing. If the API response includes a total count, print _"Showing top 10 of N — say 'more' to expand or describe a filter."_; otherwise print _"Showing the top 10. Say 'more' to fetch additional results or 'filter' to narrow."_ When the user says "more", re-call the same tool with a higher `limit`.
 
-Ask: _"Which of these would you like to remediate? (say 'all', pick numbers, or describe a filter)"_
+_"The riskiest jobs have already been ranked by impact. Let's start with the top one."_ Then proceed to step 2e for the top-ranked job. The user can say "skip this one" or "start with #3" to redirect.
 
-### 5. Build a remediation plan
+#### 2e. Walk the jobs one at a time
 
-For the selected images, fetch information about the image using this SysQL query template:
+For the current job:
 
-- if the selected metric is actually_exploitable_findings run this query:
+1. **Read its artifacts first** (tracked jobs only): `list_artifacts(parent_kind: "job", parent_id: <job_global_id>)`. Surface what exists — _"This job already has a ticket: `<reference_key>` (`<reference_url>`)"_, _"A PR was opened previously: `<reference_url>`"_, _"Previous session note: `<content>`"_. Existing work does not block the handoff — `/sysdig-remediate` runs its own dedup and will adopt or update it. Untracked candidates have no artifacts by definition (no catalog row) — skip this call.
+2. **Show impact**: call `get_job_impact` with the job id and present a concise summary — what the job's findings are, workload spread, exposure — at the level a decision needs, not a data dump.
+3. **Offer exactly three options** (AskUserQuestion): **Remediate** (hand off to `/sysdig-remediate`), **Skip** (move on, recording why), or **Stop** (wrap up the session).
 
+**Remediate.** Announce the handoff and confirm:
+
+> _"Handing off to `/sysdig-remediate` for `<image_reference>` — it will ask whether you want a ticket, a PR, or both, dedup existing work, and close the job when the work is filed. Continue?"_
+
+Invoke it as:
 ```
-MATCH KubeWorkload HAS Container RUNS Image AFFECTED_BY Vulnerability
-  WHERE Image.imageId = '<image_id>' 
-  AND Vulnerability.severity IN ['Critical', 'High'] 
-  AND Vulnerability.inUse = true 
-  AND Vulnerability.hasFix = true 
-  AND KubeWorkload.isExposed = true
-  RETURN DISTINCT Image, count(DISTINCT KubeWorkload), count(DISTINCT Vulnerability);
+/sysdig-remediate <image_reference> (image_id: <image_id>, job_id: <job_global_id>)
 ```
-
-- for all other metrics:
-
+Pass `job_id` only for tracked jobs (the catalog `global_id`). For untracked candidates omit it — `/sysdig-remediate` re-discovers the candidate itself:
 ```
-MATCH KubeWorkload HAS Container RUNS Image AFFECTED_BY Vulnerability
-  WHERE Image.imageId = '<image_id>' 
-  AND Vulnerability.severity IN ['Critical', 'High']
-  RETURN DISTINCT Image.imageReference, 
-  count(DISTINCT KubeWorkload) AS workloads_count, 
-  KubeWorkload.isExposed, 
-  RETURN DISTINCT Image, count(DISTINCT KubeWorkload), count(DISTINCT Vulnerability);
-  ```
-
-When more than one image is selected, present a
-plan table for explicit user approval before proceeding:
-
+/sysdig-remediate <image_reference> (image_id: <image_id>)
 ```
-## Remediation Plan — <environment>
+When `/sysdig-remediate` hands back, record the outcome in the session tally (state `plan` entry → `handed_off`) and move to the next job. Do not attach artifacts for work `/sysdig-remediate` did — it records its own.
 
-| # | Image | Workloads Count | Workload Exposed | Fixables | Critical (total) | High (total) |
-|---|-------|-------|-----------|---------|-----|-----|
-| 1 | quay.io/org/app:1.2 | 12 | Yes | 23 | 3 | 20 |
-| 2 | quay.io/org/svc:2.0 | 3  | No  | 12 | 1 | 11 |
-
-Total: 2 images selected.
+**Skip.** Ask for a one-line reason (or infer it from what the user said). If the job is `tracked: true`, record it server-side:
 ```
-If the users is doing a free investigation, ask him to create a plan with the selected filters (zone + metric). Use the `create_plan` tool and ask the user all needed parameters.
-Once done:
-Ask: _"Which one do you want to fix?"_
+create_artifact(
+  parent_kind: "job",
+  parent_id: <job_global_id>,
+  artifact_type: "note",
+  content: "Skipped in investigate session on <date>: <reason>."
+)
+```
+If the job is untracked, record the skip in skill state only — **never call `track_job` just to attach a note** (tracking writes a permanent catalog row; that decision belongs to `/sysdig-remediate`'s commit point). Job states other than `closed` cannot be set via MCP, so a skip is always expressed as an artifact or a state entry, never a state change.
 
-Wait for explicit approval. The user can say "skip #2", "only exposed ones", etc.
+**Stop.** Go to step 2f.
 
-### 5b. Optional ticketing
+**Transition:** if there are remaining open/in-progress jobs, say _"Let's now focus on the next top priority job: `<image_reference>`, which `<ranking_summary>`."_ and repeat step 2e. Do not re-present the full table unless the user asks.
 
-Refer to [ticketing](references/ticketing.md) for supported systems and required configuration.
+**Queue empty:**
 
-#### Detect available ticketing systems
+> _"You've worked through all the prioritized jobs in this session. `<N>` handed off to `/sysdig-remediate` (`<images>`), `<M>` skipped. The plan's measure will continue to update as fixes land and the next scan runs."_
 
-Check whether any of these are reachable via MCP or CLI:
+Then go to step 2f.
 
-- **Jira** — `jira-mcp-server` MCP tools (`jira_search_issues`, `jira_create_issue`, `jira_update_issue`) or `jira` CLI.
-- **Linear** — `linear` MCP tools or `linear` CLI.
-- **GitHub Projects** — `github` MCP tools (`add_project_item`) or `gh project` CLI.
+#### 2f. Wrap up the Plans session
 
-Record the detected system as `ticketing_system` in state. If none are found, set `ticketing_system: null`.
-
-#### Ask whether to create tickets
-
-Ask the user:
-
-> _"Do you want to create tracking tickets for any of these images? (yes / no / pick which)"_
-
-**Ticketing is fully optional.** If the user says no — or no ticketing system was detected and the user does not want to configure one — skip the rest of this step entirely and go to step 6 with no `ticket_key`.
-
-If a ticketing system is available but the user wants to use a different one, ask them to configure it; if they decline, proceed without ticketing.
-
-If the user wants to use a system that is detected but missing credentials (token, project, user, etc.), ask for the missing configuration before proceeding.
-
-#### For each image where the user wants a ticket
-
-##### a. Search for existing tickets
-
-Before creating a new ticket, search the configured system for existing tickets that reference the same image:
-
-- Search by image name in ticket summaries (e.g. `summary ~ "<image-name>"`).
-- Also search the image reference in ticket descriptions.
-
-If existing tickets are found:
-
-- If any are still **open**, propose **updating** the existing ticket instead of creating a duplicate. Show the ticket summary and ask the user to confirm.
-- Extract the assignee from the most recent ticket for this image and record it as `previous_ticket_assignee` for use in the assignee priority chain below.
-
-##### b. Determine assignee (Sysdig-side signals only)
-
-Use the first signal that yields a result. **Do not use git log / file authors here** — those are PR reviewers and live in `/sysdig-remediate`.
-
-1. **`workload_owner`** — owner annotation/label on the running workload. Query via SysQL, e.g.:
+1. **Plan path only** — attach a session report to the plan:
    ```
-   MATCH KubeWorkload HAS Container RUNS Image
-     WHERE Image.imageReference CONTAINS '<image_name>'
-     RETURN DISTINCT KubeWorkload.labels, KubeWorkload.annotations;
+   create_artifact(
+     parent_kind: "plan",
+     parent_id: <plan_global_id>,
+     artifact_type: "note",
+     content: "Investigate session on <date>: <N> of <M> jobs handed to /sysdig-remediate (<images>). Skipped: <images+reasons or 'none'>."
+   )
    ```
-   Inspect labels/annotations like `owner`, `team`, `app.kubernetes.io/owner`.
-2. **`zone_owner`** — if the selected zone defines an owner, use it.
-3. **`previous_ticket_assignee`** — from `ticket_assignees` state for this image, or from a prior open ticket discovered in step 5b.a.
-4. Leave unassigned.
+   On the free path there is no plan to attach to — give the same summary in chat instead.
+2. Save state (step 4).
 
-Present the proposed assignee with its source, e.g.:
+### 3. Findings flow
 
-- _"Suggesting @platform-team as assignee — workload has label `team: platform-team`."_
-- _"Suggesting @jane.doe — they were assigned to the previous ticket (PROJ-100) for this image."_
+Mirror the Vulnerability Management UI table: an iterative slice-and-dice loop. Each turn: translate the user's question into one `query_vulnerability_findings` call, present the rows, then propose the single most useful next move.
 
-Always confirm with the user before setting the assignee. Record the choice and its source in `ticket_assignees`.
+**Pick the starting `group_by` from the question's subject:**
 
-##### c. Create or update the ticket
+| The user asks about… | `group_by` |
+|---|---|
+| images ("most vulnerable images", "images running X") | `image` |
+| a CVE or CVE properties ("who's affected by CVE-2024-1234", "exploitable CVEs") | `cve` |
+| cloud resources / accounts / regions | `resource` |
+| packages / components ("where is log4j") | `component` |
+| raw finding rows (image × CVE pairs) | `none` |
 
-Show the draft to the user before any write operation.
+**Build filters** as structured `{field, op, value}` objects. Common fields (the full ~55-field list per grouping lives in the tool's own validation — an invalid field returns an error message listing the valid ones for that `group_by`; surface it and correct):
 
-**Summary:** `[Sysdig] Fix Critical/High vulnerabilities in <image_reference>`
+- Severity & risk: `severity`, `cvssScore`, `epssScore`, `epssPercentile`
+- Fixability & exploit: `hasFix`, `hasExploit`, `hasException`, `knownRansomwareCampaignUse`, `cisaKevDueDate`
+- Runtime context: `inUse` (the vulnerable package is actually loaded at runtime — not merely installed)
+- Identity: `cveId`, `component` fields, image fields, `namespace`, `cluster`, `node`, `accountId`, `region`, `cloudProvider`, `zoneId`
+- Dates: `publicationDate`, `fixDate`
 
-**Description (Jira / Markdown — adapt syntax for Linear / GitHub Projects):**
-```
-h2. Vulnerability Report
+Example — "show me all Critical CVEs with a fix, in use, in production":
 
-This ticket was created by the Sysdig investigate skill after scanning
-the *<environment>* environment on <date>.
-
-h2. Vulnerable Image
-
-||Property||Value||
-|Image|{noformat}<image_reference>{noformat}|
-|Base OS|<base_os>|
-|Environments|<comma-separated list>|
-|Affected workloads|<workloads_count> (<workloads_internet_exposed_count> internet-exposed)|
-
-h2. Critical & High CVEs
-
-||CVE||Severity||Package||Installed||Fix Version||CVSS||Exploitable||
-|<cve_id>|<severity>|<package>|<installed_version>|<fix_version or "none available">|<cvss>|<yes/no>|
-(repeat for each CVE)
-
-h2. Impact Assessment
-
-<actually_exploitable_explanation>
-
-*Network exposure:* <network_mitigated_explanation>
-*Acceptable risk:* <has_acceptable_findings_explanation>
-
-h2. Recommended Actions
-
-For each CVE, describe what needs to happen:
-- *<CVE-ID>* (<severity>): Update <package> from <installed_version> to a safe target version.
-- *<CVE-ID>* (<severity>): No fix available — monitor for upstream patch.
-
-h2. Next Step
-
-Run `/sysdig-remediate <image_reference> (image_id: <image_id>, ticket: <THIS_TICKET_KEY>)`
-to attempt a code fix; this ticket will be updated automatically with the PR link
-on completion.
-
-h2. References
-
-- Sysdig investigation global_id (unique candidate-job identifier in Sysdig): {noformat}<global_id>{noformat}
-- Detection date: <date>
+```jsonc
+{
+  "group_by": "cve",
+  "filters": [
+    { "field": "severity", "op": "eq", "value": "critical" },
+    { "field": "hasFix", "op": "eq", "value": true },
+    { "field": "inUse", "op": "eq", "value": true },
+    { "field": "zoneId", "op": "in", "value": [<production zone id>] }
+  ],
+  "sort": { "field": "cvssScore", "direction": "desc" },
+  "limit": 50
+}
 ```
 
-**Priority:**
-- `severity_normalized >= 0.9` → Critical
-- `severity_normalized >= 0.7` → High
-- otherwise → Medium
+Resolve zone names to IDs via [zones](references/zones.md) — never pass names.
 
-**Updating an existing ticket** (when step 5b.a found one): never remove or modify the existing description. Append below a separator and a new section:
+**Present rows at UI-table granularity** — a markdown table with the columns the grouping returns. After the table, report scale honestly. When `meta.total` is present: _"Showing the first 50 of `<total>` — say 'more' to page, or narrow the filter."_ Otherwise use `meta.hasMore`: _"Showing the first 50 — there are more; say 'more' to page, or narrow the filter."_ when true; _"That's all `<meta.count>` matching rows."_ when false.
+
+**Iterate.** Propose the next move from what the data shows: **narrow** (add a filter), **pivot** (same filters, different `group_by` — e.g. from a CVE list to the images affected by one of them), **re-sort** (single field + direction only — the backend does not support multi-column sort), or **page** (pass `cursor.next` back as `cursor`, keeping every other parameter — including `sort` — identical, or the keyset cursor breaks).
+
+**Do not mass-export.** Rows are UI-table summary data with a hard `limit ≤ 200` per call. Never loop the cursor to dump the full result set, and decline requests to export "everything" — point the user to Sysdig Reporting for bulk extracts.
+
+**SysQL escape hatch — out-of-API questions only.** When the question needs relationships the findings API doesn't model (workload ownership labels, network exposure paths, cluster topology), use `run_sysql`, e.g.:
 
 ```
-----
-
-h2. Update — <date>
-
-_Added by Sysdig investigate skill._
-
-h3. New/Updated CVEs
-... (only include changes since the last update)
-
-h3. Recommended Actions
-- <updated action items>
+MATCH KubeWorkload HAS Container RUNS Image
+  WHERE Image.imageReference CONTAINS '<image_name>'
+  RETURN DISTINCT KubeWorkload.labels, KubeWorkload.annotations;
 ```
 
-After the create or update operation, record the result in state:
+Never use SysQL for what `query_vulnerability_findings` can answer — the findings API is the UI-consistent source for findings data.
 
-- Append/upsert into `tickets` (matched by `ticket_key`).
-- Append into `ticket_history` (always append).
-- Attach `ticket_key` to that image's `plan` entry so step 6 can pass it to `/sysdig-remediate`.
+**Handoff.** Whenever the user wants to act on an image surfaced by any slice, use the same handoff as the Plans flow:
 
-### 6. Hand off to `/sysdig-remediate`
-
-Before the first invocation, announce the handoff and wait for confirmation:
-
-> _"Investigation complete. Handing off to `/sysdig-remediate` for `<image_reference>` — it will analyze fix versions and open a PR. Continue?"_
-
-For each approved image (in order), invoke `/sysdig-remediate` passing the image reference,
-`image_id`, and the optional `ticket_key` if a ticket was created or matched in step 5b:
+> _"Handing off to `/sysdig-remediate` for `<image_reference>` — it will ask whether you want a ticket, a PR, or both, dedup existing work, and close the job when the work is filed. Continue?"_
 
 ```
 /sysdig-remediate <image_reference> (image_id: <image_id>)
-/sysdig-remediate <image_reference> (image_id: <image_id>, ticket: <ticket_key>)
 ```
 
-The `ticket` argument is optional. When present, `/sysdig-remediate` will update that ticket with the PR link on completion. When absent, `/sysdig-remediate` opens the PR without touching any ticketing system.
+(`image_id` when the rows carry it — by-image rows nest it as `image.id` and the reference as `image.ref`; Findings-flow slices have no `job_id`.) When it hands back, continue slicing or wrap up.
 
-#### Branching paths
+**Wrap up:** summarize the session's slices and handoffs in chat, then save state (step 4).
 
-After step 5b, the user is on one of these paths:
+### 4. Save state
 
-- **investigate → ticket → stop** — ticket created, someone else will pick it up later and run `/sysdig-remediate <image> (..., ticket: <key>)`.
-- **investigate → ticket → remediate** — ticket created, immediately hand off; remediate updates the ticket on PR open.
-- **investigate → remediate (no ticket)** — user skipped ticketing entirely; remediate opens the PR with no ticket update.
-- **investigate (no ticket) → stop** — user reviewed the plan and chose not to act now.
+Call the MCP tool `save_skill_state` with `{ "skill_state": "investigate", "version": <n>, "data": { ... } }`. Refer to [references/state.md](references/state.md) for the full schema. Persist in `data`: `last_run`, `flow`, `environment`, `focus`, `images_found`, and the per-image `plan` entries — surfaced-but-undecided jobs as `pending`, decided ones as `handed_off` / `skipped`. The `pending` entries are what makes resume work.
 
-After each image completes, update its plan entry `status` to `remediated` (or `skipped`
-if the user chose to skip it), then ask whether to continue with the next image.
+> **Version on write**: pass the same `version` value returned by the `get_skill_state` call at the start of the session — or `0` if the call returned `null` (no prior state). The server bumps the version itself. Do not include `version` inside `data`.
 
-### 7. Save state
+Save state even if the session ended early — `plan` entries with `status: "pending"` let the user resume where they left off.
 
-Call the MCP tool `save_skill_state` with `{ "skill_state": "investigate", "version": <n>, "data": { ... } }`. Refer to the [State](#state) section above for the full schema. Persist in `data`:
-
-- `last_run`, `environment`, `focus`, `images_found`, `images_planned`, `images_remediated`, `plan`
-- `ticketing_system` (or `null` if the user skipped ticketing)
-- `ticket_assignees`, `tickets`, `ticket_history` (only if any ticket activity happened)
-
-> **Version on write**: pass the same `version` value returned by the `get_skill_state` call at the start of the session — or `0` if the call returned `null` (no prior state). The server bumps the version itself. See [Read/write rules](#readwrite-rules). Do not include `version` inside `data`.
-
-Save state even if the session ended before remediation started — the plan entries with
-`status: "pending"` allow the user to resume from where they left off.
-
-On a 409 conflict, call `get_skill_state` again, merge the plan entries (upsert by `global_id`) into the freshly-read state, and retry once with the new `version`.
+On a 409 conflict, call `get_skill_state` again, merge the plan entries (upsert by `global_id` when present, else by `image_reference` — Findings-flow entries have no `global_id`) into the freshly-read state, and retry once with the new `version`.
 
 ## Error handling
 
-Every failure surfaced to the user follows the same **what / why / fix** shape, modeled on the verbatim MCP-unreachable message in step 0a:
+Every failure surfaced to the user follows the same **what / why / fix** shape:
 
 1. **What** — the specific operation that failed.
 2. **Why** — the underlying cause in concrete terms.
@@ -384,29 +353,24 @@ Every failure surfaced to the user follows the same **what / why / fix** shape, 
 
 Apply this template to:
 
-- **SysQL failures** in step 5 (e.g. malformed query, MCP timeout, empty result against an expected non-empty workload).
-- **`list_candidate_remediation_jobs` errors** in step 4 beyond the "empty result" case already documented (e.g. 4xx/5xx, scope mismatch, missing zone access).
-- **`save_skill_state` conflicts** in step 7 — after one merge-and-retry attempt fails, surface the conflict with what/why/fix instead of silently retrying.
-- **Ticketing write failures** in step 5b — per-image, with the ticket system, the operation (create vs. update), and the system's error reason.
-
-For **batched ticket operations** (when the user said "create tickets for all"), use a partial-success report instead of bundling everything into a single success or single failure:
-
-> _"Created 3 of 5 tickets. The other 2 failed: `quay.io/org/app:1.2` (Jira: assignee not in project), `quay.io/org/svc:2.0` (Jira: 401 unauthorized). Want details on any?"_
-
-Never report partial success as plain "success".
+- **`query_vulnerability_findings` validation errors** — the tool's error message lists the valid fields/ops for the chosen `group_by`. Show the relevant part to the user, correct the call, and retry once. Never silently retry the same invalid call.
+- **`explore_jobs` errors** beyond the "empty result" case (4xx/5xx, scope mismatch, missing zone access).
+- **SysQL failures** in the Findings-flow escape hatch (malformed query, MCP timeout).
+- **`save_skill_state` conflicts** — after one merge-and-retry attempt fails, surface the conflict with what/why/fix instead of silently retrying.
+- **A denied MCP tool call** — the agent refuses a `mcp__secure-mcp-server__*` call rather than the server returning an error. This is a **prefix mismatch**, not unreachability: the Sysdig MCP server is registered under a different prefix in this agent. Point the user to the "denied / prefix mismatch" fix in [`references/mcp-setup.md`](references/mcp-setup.md) instead of retrying.
 
 ## Important rules
 
-- Always read state at the start (via script) and write state at the end — even for short sessions.
+- Always read state at the start and write state at the end — even for short sessions.
 - Keep the conversation focused: one environment per session.
-- Do not perform fix analysis or open PRs here — that is the job of `/sysdig-remediate`.
-- Always sort the image table: internet-exposed first, then by severity score descending.
-- When the user says "all", still present the plan table and ask for explicit confirmation
-  before handing off to `/sysdig-remediate`.
+- **This skill produces no deliverables.** Never create or update tickets, never open PRs, never apply fixes — `/sysdig-remediate` owns all of it.
+- **Never call `track_job` or `close_job`.** Tracking happens at `/sysdig-remediate`'s commit point; closing happens there when work is filed. This skill doesn't have these tools and must not work around that.
 - Never invoke `/sysdig-remediate` on an image without the user's explicit approval.
-- **Ticketing is always optional** — proceed without a ticket whenever the user declines or no ticketing system is configured.
-- For ticket assignees, use **Sysdig-side signals only** (`workload_owner`, `zone_owner`, `previous_ticket_assignee`). Never use git log / file authors here — those belong to PR review in `/sysdig-remediate`.
-- Always search for an existing open ticket before creating a new one. Prefer updating over duplicating.
-- When updating an existing ticket, never remove or modify the original description — append below a `----` separator.
-- Never set an assignee without confirming with the user first.
-- **Respect the user's "no".** When the user declines an image, ticket suggestion, or proposed assignee, mark the decision (e.g. set the matching `plan` entry's `status` to `skipped`) and never re-suggest the same item within the session.
+- Never re-order ranked-jobs tables — the server ranking (by measure) is the priority order; present rows as returned.
+- **Respect the user's "no".** When the user skips an image, mark the matching `plan` entry `skipped` and never re-suggest it within the session.
+- **Artifacts are the primary source of truth.** When `skill_state` and job/plan artifacts conflict, trust the artifacts — they are server-side, survive across agents and sessions, and reflect what actually happened. Update `skill_state` to match, never the reverse.
+- **Always read before acting.** Call `list_artifacts` for a plan at session start and for each tracked job before offering options on it.
+- **Findings flow: never mass-export.** `limit ≤ 200` per call, no cursor-draining loops, no bulk raw dumps. Point bulk needs to Sysdig Reporting.
+- **Terminology — findings vs vulnerabilities.** Use "findings" for the runtime-weighted unit measures rank on (what `explore_jobs` and the findings API return). Use "vulnerabilities" only for catalog-level CVE data. Do not use them interchangeably.
+- **Terminology — severities.** Always PascalCase in prose: `Critical`, `High`, `Medium`, `Low`. (Filter *values* in `query_vulnerability_findings` calls use the API's lowercase form, e.g. `"critical"`.)
+- **Terminology — numbers carry units.** On first occurrence in a message, always include the unit: "30 days", "137 findings", "12.7%".

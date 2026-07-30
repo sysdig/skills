@@ -17,22 +17,33 @@ Check for existing onboarding state:
    ```
    **Existing setup for AWS 123456789012:**
    - Connection (security posture, identity analysis) — active
-   - Cloud Logs (threat detection) — not configured
-   - Agentless Scanning — not configured
+   - Threat Detection (Cloud Logs) — not configured
+   - Host Scanning (Agentless) — not configured
    ```
 
-2. Ask what to add:
+2. Ask what to add. Offer the same capability set as initial onboarding (see
+   [interview-questions.md](interview-questions.md) Step 3d), minus anything
+   already deployed. Omit AWS-only items (Workload Scanning)
+   for GCP/Azure accounts:
    ```json
    {
-     "question": "Which blocks do you want to add to this account?",
+     "question": "Which capabilities do you want to add to this account?",
      "header": "Add Features",
      "multiSelect": true,
      "options": [
-       {"label": "Cloud Logs", "description": "Block 2 — real-time threat detection"},
-       {"label": "Agentless Scanning", "description": "Block 3 — vulnerability scanning"}
+       {"label": "Threat Detection", "description": "Cloud Logs for real-time threat detection"},
+       {"label": "Advanced Identity Analysis", "description": "Usage-based least-privilege; builds on Threat Detection's data"},
+       {"label": "Host Scanning (Agentless)", "description": "Host-disk vulnerability scanning (+ container/malware sub-options)"},
+       {"label": "Workload Scanning", "description": "Scan ECS + Lambda container images (AWS only)"}
      ]
    }
    ```
+   Additive options only — do not add a "None" / "nothing more" checkbox here
+   (see [interview-questions.md](interview-questions.md) Picker rules); if the
+   user wants nothing, they submit an empty selection and this step ends.
+   Run the matching Step 3d sub-questions (log capture method, per-feature
+   regions, Host Scanning extras) for whatever the
+   user adds.
 
 3. Generate only the delta Terraform — add new module blocks to the existing
    configuration file, keeping existing resources untouched
@@ -63,9 +74,10 @@ Do NOT use import for standard incremental onboarding — just add new blocks.
 
 | Adding | Requires | Warning |
 |--------|----------|---------|
-| Cloud Logs | Onboarding module | Already present if Connection exists |
-| Advanced identity analysis | Cloud Logs + Connection | "Advanced identity analysis needs both Connection and Cloud Logs" |
-| Agentless Scanning | Onboarding module | Already present if Connection exists |
+| Threat Detection | Onboarding module | Already present if Connection exists |
+| Advanced Identity Analysis | Threat Detection (Cloud Logs) + Connection | "Advanced Identity Analysis needs both Connection and Cloud Logs" |
+| Host Scanning (Agentless) | Onboarding module | Already present if Connection exists |
+| Workload Scanning | Onboarding module (AWS only) | Omit for GCP/Azure |
 
 ## Confirmation Table
 
@@ -75,5 +87,5 @@ Add an "existing" vs "new" indicator:
 |-----------|--------|
 | Security posture | existing |
 | Identity analysis (foundational) | existing |
-| Cloud Logs (EventBridge) | **new** |
-| Identity analysis (advanced) | **new** |
+| Threat Detection (EventBridge) | **new** |
+| Advanced Identity Analysis | **new** |

@@ -40,12 +40,16 @@ The summary must mention the file path so the user can read the full case if the
 The case is **narrative**, not a data dump. Render the sections in this order. Every section has a job; if a section has no signal, write a one-sentence "no signal" line rather than skipping the heading entirely — the structure is itself part of the audit trail.
 
 ```markdown
-## <aiGeneratedName> — <MITRE tactic, e.g. "Discovery (T1082)">
+# <aiGeneratedName> — <MITRE tactic, e.g. "Discovery (T1082)">
 
-**Event ID:** <event.id> | **Type:** <event.type> | **Status:** <event.status>
-**Time:** <startTime> — <lastSignal>
+| Field | Value |
+|-------|-------|
+| Event ID | <event.id> |
+| Type | <event.type> |
+| Status | <event.status> |
+| Time | <startTime> — <lastSignal> |
 
-### Summary
+## Summary
 
 <1–2 sentences. Lead with the single highest-confidence finding plus the
 investigator's read of what happened. Example: "The host ran a sequence
@@ -53,7 +57,7 @@ of system-information-gathering commands consistent with reconnaissance
 (T1082); no evidence the listed CVEs were exploited. Confidence the
 event is opportunistic recon: 4/5.">
 
-### What happened
+## What happened
 
 - **Trigger:** <rule name(s)>, classified as <MITRE tactic>.
 - **Process tree (from `mcp__secure-mcp-server__get_event_process_tree`, if available):** render as `parent → child → grandchild` with command-line snippets where useful. Fall back to "no process tree available" if the MCP call returned nothing or wasn't loaded.
@@ -61,7 +65,37 @@ event is opportunistic recon: 4/5.">
 - **Resource:** <cluster/namespace/workload> *(or `host <hostname>` for non-K8s)*.
 - **AI-generated rationale:** <1–2 sentences summarising `aiGeneratedDescription`.>
 
-### Attack flow *(render only when the case is multi-stage)*
+## Activity audit timeline *(from `case.activity_audit` — render even when empty)*
+
+The agent-captured command / connection / file-access trail for the affected
+container / pod / workload around the detection. See `references/activity-audit.md`.
+
+Lead with one sentence stating scope and window, e.g. *"Activity audit for
+container `<short-id>` (pod `<pod>`) in the ±2h band around the trigger:
+14 commands, 6 connections, 9 file accesses."* If `case.activity_audit.status`
+is `skipped`, write a single line — e.g. *"No activity audit data for this scope
+(capture not enabled, or trail empty in window)."* — and skip the table.
+
+Render the trail as a chronological table. Mark the row(s) matching the trigger
+event with **→** in the first column so the reader sees the detection anchored
+in the broader activity — everything above it is pre-detection setup, everything
+below is post-detection dwell / lateral movement / exfil:
+
+```markdown
+| | Time (UTC) | Type | Detail |
+|---|---|---|---|
+| → | `<HH:MM:SS>` | `command` | `<cmdline>` — *trigger* |
+|   | `<HH:MM:SS>` | `connection` | `out tcp <serverIp>:<port> (<proc>)` |
+|   | `<HH:MM:SS>` | `fileaccess` | `write <path>` |
+```
+
+Keep it to the high-signal entries (the pivot command and what it spawned). If
+the trail is large, summarise low-value rows (e.g. "12× routine `connection`
+entries to in-cluster services — omitted") and set `truncated: true` rather than
+dumping every row. When a command was expanded with `trace_activity_audit_command`,
+fold its child connections/files into this table inline.
+
+## Attack flow *(render only when the case is multi-stage)*
 
 Render this section as a Mermaid `flowchart LR` followed by a compact timeline table, **only** when at least two of the following hold:
 
@@ -71,7 +105,7 @@ Render this section as a Mermaid `flowchart LR` followed by a compact timeline t
 
 If none / one of the above holds, omit this section entirely — don't render an empty diagram or placeholder. A linear single-tactic event is best read as the "What happened" bullets, not a graph.
 
-#### Diagram conventions
+### Diagram conventions
 
 The goal is a per-action graph, not an entity-relationship graph. Each malicious operation is its own node with a timestamp; each labelled edge is causation or data flow. Boundaries (pods, hosts, AWS accounts, attacker infra) are rendered as Mermaid `subgraph` blocks so the reader sees what crossed which trust boundary.
 
@@ -93,23 +127,25 @@ The goal is a per-action graph, not an entity-relationship graph. Each malicious
 - Use dotted edges (`-. " " .->`) for inferred / out-of-band relationships (e.g. attacker IP correlation across non-contiguous events).
 - Don't write sentences on edges. The label should fit on one line of the rendered SVG.
 
-**Class definitions** (paste at the bottom of every diagram, regardless of which classes are used):
+**Class definitions.** Paste the four Sysdig brand `classDef` lines from the
+**Mermaid section of [`sysdig-brand.md`](sysdig-brand.md)** verbatim at the bottom
+of every diagram (regardless of which classes are used). That file is the single
+source of truth for the palette — **do not hardcode colors here.** The four
+classes and when to apply each:
 
-```
-classDef entrypoint fill:#bdd9f4,stroke:#1f6feb,stroke-width:2px;
-classDef malicious  fill:#ffd8d8,stroke:#cf222e,stroke-width:1px;
-classDef cloud      fill:#fff8c5,stroke:#9a6700,stroke-width:1px;
-classDef external   fill:#eeeeee,stroke:#57606a,stroke-width:1px,stroke-dasharray:4 2;
-```
+- `entrypoint` — the initial foothold / exploited workload
+- `malicious` — attacker-controlled actions and processes
+- `cloud` — cloud control-plane / API activity
+- `external` — external or out-of-band actors (rendered with a dashed border)
 
 Apply with `class node1,node2 malicious;` after the edge definitions.
 
-#### Sizing limits
+### Sizing limits
 
 - Soft cap: ~15 action nodes. Hard cap: ~25. Past that, group adjacent steps under a synthetic node (e.g. "discovery sweep — find/curl/uname ×N") rather than rendering each.
 - Always cap subgraph titles at ~120 chars; line-wrap long ones with `<br/>`.
 
-#### Skeleton (substitute placeholders; trim/extend branches based on the actual chain)
+### Skeleton (substitute placeholders; trim/extend branches based on the actual chain)
 
 ````markdown
 ```mermaid
@@ -149,10 +185,7 @@ flowchart LR
   iam_user -- "StopLogging + DeleteTrail" --> ct
   iam_user -- "PutBucketPolicy + DeletePublicAccessBlock" --> s3
 
-  classDef entrypoint fill:#bdd9f4,stroke:#1f6feb,stroke-width:2px;
-  classDef malicious  fill:#ffd8d8,stroke:#cf222e,stroke-width:1px;
-  classDef cloud      fill:#fff8c5,stroke:#9a6700,stroke-width:1px;
-  classDef external   fill:#eeeeee,stroke:#57606a,stroke-width:1px,stroke-dasharray:4 2;
+  %% Paste the four classDef lines from the Mermaid section of sysdig-brand.md here, verbatim.
 
   class a1,a2,a3,ckey malicious;
   class iam_role,iam_user,ct,s3 cloud;
@@ -160,7 +193,7 @@ flowchart LR
 ```
 ````
 
-#### Timeline (compact)
+### Timeline (compact)
 
 Below the diagram, render a 3-column markdown table that lists every node from the diagram in chronological order. This gives the reader a linear narrative to read alongside the visual:
 
@@ -172,14 +205,14 @@ Below the diagram, render a 3-column markdown table that lists every node from t
 
 Keep it tight: one row per diagram node, in chronological order. Use inline code for command literals and identifiers; leave prose for the note column.
 
-### Resource context
+## Resource context
 
 - **Cluster / host metadata:** <e.g. "GCP node in cluster `ai-attack-demo`, region europe-west1">.
 - **Sibling workloads on this resource:** <list 3–5 from `mcp__secure-mcp-server__run_sysql` siblings query. If empty, "no siblings surfaced".>
 - **Prior events on this resource (last 7d):** <count + 1-line rule summary, e.g. "4 prior events: 2× Discovery, 1× Defense Evasion, 1× same rule firing 2 days ago". If empty, "no prior events".>
 - **ServiceAccount RBAC** *(K8s workload threats only)*: <one-line summary of bound roles, e.g. "default SA with cluster-wide list/get on Pods + Deployments — explains kubectl-style lateral capability". If skipped, "RBAC not enumerated".>
 
-### Incident scope (cluster activity in window) *(from Phase 2 cluster-wide sweep — render even when empty)*
+## Incident scope (cluster activity in window) *(from Phase 2 cluster-wide sweep — render even when empty)*
 
 <One sentence framing: "X cluster-wide events fired in the ±2h window; Y matched the high-signal watchlist." If zero, write "No related cluster activity in the window — single-resource event.">
 
@@ -192,7 +225,7 @@ If `case.incident_threat_groups` is non-empty (incident-scope detection from Pha
 
 Cloud-API summary: <if cloudtrail integrated, summarise S3/IAM/IMDS hit counts; otherwise "No CloudTrail integration in this tenant".>
 
-### Vulnerability surface
+## Vulnerability surface
 
 <resource>:
 - **Counts:** <X critical, Y high in-use, Z exploitable, K with fix available>.
@@ -200,7 +233,7 @@ Cloud-API summary: <if cloudtrail integrated, summarise S3/IAM/IMDS hit counts; 
 
 If `scan_found: false`, write "No runtime scan data available for this resource".
 
-### Correlation & confidence
+## Correlation & confidence
 
 <1 sentence summary of what scored ≥4 and why, plus what was deliberately not correlated. Example: "1 finding scored ≥4: CVE-2024-3094 in `liblzma` matches the suspicious `sshd` execution chain. The 4 KEV-listed CVEs on the host did not correlate (tactic mismatch — recon rule vs initial-access exploits) and are listed in Vulnerability surface above for completeness.">
 
@@ -209,7 +242,7 @@ If `scan_found: false`, write "No runtime scan data available for this resource"
 
 *(Maximum 3 rows. If fewer, fewer.)*
 
-### Recommended next checks
+## Recommended next checks
 
 <3–4 bullets. Factual, not prescriptive. Each is an action that would confirm or refute a hypothesis raised by the case.>
 
@@ -269,40 +302,23 @@ Wrap the same Block 1 markdown content in this HTML page. The page loads `marked
 
 The agent's job is to produce the markdown content (Block 1 verbatim) and substitute it into the `<script id="md" type="text/markdown">` block below. **Do not pre-render the markdown to HTML yourself** — `marked` does that at page-load time, which keeps the file editable and small.
 
+Copy the `<style>` block from [`sysdig-brand.md`](sysdig-brand.md) **verbatim**
+into the `<head>` (shown as `{{STYLE_BLOCK}}` below) — it is the single source
+of truth for artifact styling and handles light/dark mode automatically. Do not
+hardcode colors here.
+
 ```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>Sysdig Runtime Investigation — <event_id></title>
-<style>
-  :root { color-scheme: light dark; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif; max-width: 1200px; margin: 2em auto; padding: 0 1.5em; line-height: 1.55; color: #1f2328; }
-  h1, h2, h3, h4 { color: #1f2328; line-height: 1.25; margin-top: 1.6em; }
-  h1 { border-bottom: 1px solid #d0d7de; padding-bottom: .3em; }
-  h2 { border-bottom: 1px solid #d0d7de; padding-bottom: .3em; }
-  code { background: #f6f8fa; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 0.92em; }
-  pre { background: #f6f8fa; padding: 1em; border-radius: 6px; overflow-x: auto; }
-  pre code { background: transparent; padding: 0; }
-  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-  th, td { border: 1px solid #d0d7de; padding: 6px 12px; text-align: left; vertical-align: top; }
-  th { background: #f6f8fa; font-weight: 600; }
-  blockquote { border-left: 4px solid #d0d7de; color: #57606a; padding: 0 1em; margin: 1em 0; }
-  .mermaid { text-align: center; margin: 1.5em 0; background: #fafbfc; padding: 1em; border-radius: 6px; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #0d1117; color: #c9d1d9; }
-    h1, h2, h3, h4 { color: #c9d1d9; }
-    h1, h2 { border-bottom-color: #30363d; }
-    code, pre { background: #161b22; }
-    th { background: #161b22; }
-    th, td { border-color: #30363d; }
-    blockquote { border-left-color: #30363d; color: #8b949e; }
-    .mermaid { background: #161b22; }
-  }
-</style>
+{{STYLE_BLOCK — the <style>...</style> block copied verbatim from sysdig-brand.md}}
 </head>
 <body>
+{{BRAND_HEADER — the <div class="sd-header"> snippet from sysdig-brand.md, copied verbatim}}
 <div id="rendered"></div>
+{{POWERED_BY — the <div class="sd-poweredby"> snippet from sysdig-brand.md, as the last element of body}}
 
 <script id="md" type="text/markdown">
 <!-- ⇩ PASTE BLOCK 1 MARKDOWN CONTENT VERBATIM HERE ⇩ -->
@@ -325,11 +341,10 @@ The agent's job is to produce the markdown content (Block 1 verbatim) and substi
     el.parentElement.replaceWith(div);
   });
 
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default',
-    flowchart: { curve: 'basis', useMaxWidth: true },
-  });
+  {{MERMAID_INIT — the `const sdDark = …` line and the `mermaid.initialize({…})`
+    call from the Mermaid section of sysdig-brand.md, copied verbatim. It sets
+    the theme plus the cluster/subgraph greys for light and dark. Do not hardcode
+    colors here.}}
   await mermaid.run();
 </script>
 </body>
@@ -341,5 +356,5 @@ The agent's job is to produce the markdown content (Block 1 verbatim) and substi
 - Substitute `<event_id>` in the `<title>` tag with the actual event ID.
 - Paste the Block 1 markdown into the `<script id="md">` block verbatim. Markdown inside `<script type="text/markdown">` is opaque to the browser parser, so no escaping is needed for `<`, `>`, `&` etc.
 - Do not inline the marked/mermaid libraries; the CDN paths are stable and the page loads instantly. If offline use is required, the user can swap the script srcs for local copies — call this out in the summary if relevant.
-- The page works in light and dark mode. Mermaid uses the matching theme.
+- The page works in light and dark mode. Mermaid uses the matching theme. The `{{MERMAID_INIT}}` block (theme + cluster greys) and the `{{STYLE_BLOCK}}`/header/footer all come from `sysdig-brand.md` verbatim — never hardcode colors in this template.
 - Tested with `marked` v9+ and `mermaid` v10+. Both are pinned to major versions so minor bumps don't break it.

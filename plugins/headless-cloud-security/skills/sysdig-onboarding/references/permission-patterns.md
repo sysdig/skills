@@ -72,6 +72,11 @@ destructive operations manual.
       "Bash(uname *)",
       "Bash(systemctl status *)",
       "Bash(journalctl -u dragent*)",
+      "Bash(sudo test -s /opt/draios/logs/draios.log*)",
+      "Bash(sudo grep * /opt/draios/logs/draios.log*)",
+      "Bash(sudo sed -n * /opt/draios/logs/draios.log*)",
+      "Bash(sudo tail * /opt/draios/logs/draios.log*)",
+      "Bash(lsmod*)",
       "Bash(cat /etc/os-release*)",
       "Bash(dpkg --print-architecture*)",
       "Bash(docker logs sysdig-agent*)",
@@ -260,10 +265,14 @@ Capability → `<features>` argument mapping: see [permissions.md](permissions.m
 | `kubectl get pods -n sysdig-agent` | READ-ONLY | None — pod status |
 | `kubectl logs -n sysdig-agent <pod>` | READ-ONLY | None — pod logs |
 | `systemctl status dragent` | READ-ONLY | None — service status |
-| `journalctl -u dragent --no-pager -n 100 --grep ...` | READ-ONLY | None — reads agent logs (auth, handshake, credential checks) |
-| `docker logs sysdig-agent` | READ-ONLY | None — reads agent container logs (Docker install) |
+| `sudo test -s /opt/draios/logs/draios.log` | READ-ONLY | None — file-sink precondition for Checks 1b–6 |
+| `sudo grep ... /opt/draios/logs/draios.log` | READ-ONLY | None — auth, connectivity, credential, config-error and capability checks (the file sink is root-only) |
+| `sudo sed -n '<from>,<to>p' /opt/draios/logs/draios.log` | READ-ONLY | None — reads the last feature-summary block (Check 6a) |
+| `lsmod` | READ-ONLY | None — confirms the `kmod` driver is loaded (Check 1b) |
+| `journalctl -u dragent --no-pager -n 100` | READ-ONLY | None — fallback only: "is the unit producing anything at all". It does **not** carry the Information-level lines Checks 2–4 need |
+| `docker logs sysdig-agent` | READ-ONLY | None — container liveness / crash-loop only (Docker install). Same `log_level` gate as journald, so **not** a source for Checks 2–4 |
 | `docker inspect sysdig-agent --format '{{.RestartCount}} {{.State.Running}}'` | READ-ONLY | None — crash-loop detection (Docker install) |
-| `docker exec sysdig-agent grep ... /opt/draios/logs/draios.log` | READ-ONLY | None — the file log lives inside the container |
+| `docker exec sysdig-agent grep ... /opt/draios/logs/draios.log` | READ-ONLY | None — the file log lives inside the container; this is the Docker equivalent of the `sudo grep` rows above, for Checks 2–6 |
 
 ### Step 8: Offboarding (if applicable)
 

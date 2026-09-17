@@ -1,4 +1,9 @@
-# SkillSpector baseline for draios/bloom skills.
+# SkillSpector baseline for the Sysdig agent skills.
+#
+# NOTE: this file is promoted to the public repo alongside the skills (see
+# .github/PROMOTE-PUBLIC.md), so its comments are customer-visible — keep internal
+# codenames and internal repo URLs out of it. Enforced by
+# .github/scripts/check-internal-refs.sh.
 #
 # Findings matched here are suppressed on future scans so only NEW / real issues
 # surface. Seeded from a manual security triage in which every entry below was read
@@ -116,6 +121,9 @@ rules:
   - id: "PE5"
     path: "*generate-config.md"
     reason: "By-design: same read-only host-root mount as the host-shield.md PE5 entry above, stated in the generation branch that assembles the Docker install command."
+  - id: "PE5"
+    path: "*templates/host-shield.yaml"
+    reason: "By-design: `-v /:/host:ro` appears in a template comment (not executed) documenting the Docker install method — the host scanner resolves paths relative to `host_scanner.host_fs_mount_path`, so on the container path the host root is mounted read-only at /host. Same accepted read-only host-root mount as the host-shield.md / generate-config.md PE5 entries; emitted into the install command only when the user selects host posture or host vulnerability management."
   - id: "PE5"
     path: "*threat-patterns.md"
     reason: "FP: nsenter etc. appear in a Falco detection-pattern description, not executed by the skill."

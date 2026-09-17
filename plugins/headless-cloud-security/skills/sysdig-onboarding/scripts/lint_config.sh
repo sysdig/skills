@@ -2,7 +2,9 @@
 # lint_config.sh — Post-generation checks for configs the skill writes
 #
 # Usage:
-#   lint_config.sh <file> [file...]
+#   lint_config.sh [--user-filled] <file> [file...]
+#   Flags may appear anywhere in the argument list — `lint_config.sh cfg.yaml
+#   --user-filled` works too. Use `--` to lint a file whose name starts with `-`.
 #
 # Run after Step 7 file generation, BEFORE terraform init/plan or
 # helm template. Catches the classic generation mistakes mechanically:
@@ -11,15 +13,39 @@
 #   3. Mutually-exclusive marker pairs both present
 #      (CDR vs CDR_CLOUDLOGS, CIEM Advanced vs CIEM_ADVANCED_CLOUDLOGS)
 #   4. WARN (non-fatal): secret-looking literals on credential keys — fresh
-#      generation must use var references or REPLACE_WITH placeholders; a
-#      user-completed file (real key already pasted) only warns.
+#      generation must use var references or REPLACE_WITH placeholders.
+#
+# --user-filled  Skip check 4. Use it for the RE-LINT after the user pastes
+#                their own Agent Access Key into dragent.yaml / values.yaml.
+#                That is the documented happy path, so warning there trains
+#                operators to ignore lint output — exactly what this flag
+#                prevents. Never pass it on a freshly generated file.
 #
 # Output: `OK <file>` / `WARN <file>: ...` / `ERROR <file>: ...` lines.
 # Exit codes: 0 — no errors (warnings allowed); 1 — one or more errors.
 
 set -euo pipefail
 
-[[ $# -ge 1 ]] || { echo "usage: lint_config.sh <file> [file...]" >&2; exit 1; }
+# Flags are accepted in any position: options-after-filenames is the natural
+# order and used to fail with `ERROR --user-filled: file not found`, which the
+# skill treats as "do not hand any install command to the user".
+USER_FILLED=false
+FILES=()
+END_OF_OPTS=false
+for arg in "$@"; do
+  if [[ "$END_OF_OPTS" == true ]]; then
+    FILES+=("$arg"); continue
+  fi
+  case "$arg" in
+    --user-filled) USER_FILLED=true ;;
+    --) END_OF_OPTS=true ;;
+    -*) echo "unknown option: $arg (known: --user-filled)" >&2; exit 1 ;;
+    *) FILES+=("$arg") ;;
+  esac
+done
+
+[[ ${#FILES[@]} -ge 1 ]] || { echo "usage: lint_config.sh [--user-filled] <file> [file...]" >&2; exit 1; }
+set -- "${FILES[@]}"
 
 ERRORS=0
 problem() { echo "ERROR $1: $2"; ERRORS=$((ERRORS + 1)); }
@@ -90,7 +116,12 @@ for f in "$@"; do
   # 4. Hardcoded secret-looking literals on credential keys.
   #    Allowed values: var./local. references, ${...} interpolation,
   #    {{...}} handled above, REPLACE_WITH/PASTE_YOUR placeholders.
-  suspects=$(grep -n -E '^[^#]*(api_token|access_key|customerid|secret)[[:space:]"'"'"']*[:=]' "$f" 2>/dev/null || true)
+  #    Skipped with --user-filled: after the user pastes their own key the
+  #    literal is expected, and warning on the happy path is noise.
+  suspects=""
+  if [[ "$USER_FILLED" == "false" ]]; then
+    suspects=$(grep -n -E '^[^#]*(api_token|access_key|customerid|secret)[[:space:]"'"'"']*[:=]' "$f" 2>/dev/null || true)
+  fi
   if [[ -n "$suspects" ]]; then
     while IFS= read -r hit; do
       [[ -z "$hit" ]] && continue

@@ -90,11 +90,19 @@ allowed-tools:
   - Bash(echo "${SYSDIG_SECURE_API_TOKEN:+SET}")
   # Linux host (Step 5) — read-only inspection only. The `draios-agent` package
   # registers the systemd unit `dragent`; Docker installs use the container
-  # name `sysdig-agent`. Service lifecycle commands (systemctl
-  # enable/start/restart) are Tier 2 — see references/permission-patterns.md.
+  # name `sysdig-agent`. Verification Checks 2-6 read the FILE sink
+  # /opt/draios/logs/draios.log (root-only, hence `sudo`) — journald and
+  # `docker logs` do not carry those lines. Service lifecycle commands
+  # (systemctl enable/start/restart) are Tier 2 — see
+  # references/permission-patterns.md.
   - Bash(systemctl status dragent*)
   - Bash(systemctl is-active dragent*)
   - Bash(journalctl -u dragent*)
+  - Bash(sudo test -s /opt/draios/logs/draios.log*)
+  - Bash(sudo grep * /opt/draios/logs/draios.log*)
+  - Bash(sudo sed -n * /opt/draios/logs/draios.log*)
+  - Bash(sudo tail * /opt/draios/logs/draios.log*)
+  - Bash(lsmod*)
   - Bash(docker logs sysdig-agent*)
   - Bash(docker inspect sysdig-agent*)
   - Bash(docker exec sysdig-agent grep*)
@@ -102,23 +110,21 @@ allowed-tools:
   - Bash(uname *)
   - Bash(cat /etc/os-release*)
   - Bash(dpkg --print-architecture*)
-version: 1.0.1
+version: 1.0.2
 ---
 
-## First-run notice (Public Beta)
+## First-run notice
 
-Before doing any other work for this skill, perform this one-time check:
-
-1. If `~/.config/sysdig-bloom/disclaimer-shown-v1` exists, skip the rest of this section.
-2. Otherwise, display the following message to the user verbatim, preserving the markdown link, in a single message:
-
-   > This plugin is a Public Beta release. It is provided “as is” and “as available,” without warranties of any kind. By installing this plugin, you agree to the Public Beta Terms available in the [repository readme](https://github.com/sysdig/skills#public-beta-terms).
-
-3. Create the marker file `~/.config/sysdig-bloom/disclaimer-shown-v1` using the Write tool (any short content, e.g. the current UTC timestamp). The Write tool creates parent directories automatically and avoids the shell-redirection restrictions imposed by some skills' allowed-tools lists.
-4. Then continue with the user's request.
+Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 
 When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+
+## On-brand output
+
+This skill renders an on-brand HTML onboarding summary using the shared Sysdig brand file (see the summary template) — never hand-craft styling. For the full on-brand methodology, see [`references/on-brand-output.md`](references/on-brand-output.md).
+
+This skill makes no MCP calls, so it carries none of the report-engine or brand-kit tools — don't call them here. If a branded **PDF** is wanted instead of the HTML summary, hand off to the `sysdig-report` skill if it's installed; otherwise stay with the summary template.
 
 # Sysdig Onboarding Assistant
 
@@ -158,14 +164,14 @@ or autonomous mode, then generate tailored installation configurations.
   steps. If they mention specifics early, don't re-ask.
 - **Provider support tiers.**
   - **Supported:** AWS (cloud), Kubernetes (cluster), GCP single project (cloud),
-    Azure single subscription (cloud).
+    Azure single subscription (cloud), and Linux hosts.
     Fully tested — provide the full guided experience with troubleshooting.
-  - **Experimental:** GCP organization scope, Azure tenant scope, Linux hosts,
+  - **Experimental:** GCP organization scope, Azure tenant scope,
     and Windows nodes (Kubernetes). Configuration generation and permission
     validation work and the config keys are verified against the Sysdig agent
     sources, but the guided flow has not been tested end-to-end. Present the
-    experimental disclaimer (see Step 3a / 3b for cloud, Step 5 for hosts)
-    and proceed with best-effort guidance.
+    experimental disclaimer (see Step 3a / 3b for cloud) and proceed with
+    best-effort guidance.
   - **Not automated by this skill (but supported by Sysdig).** These products
     exist and are documented; this skill just does not generate their
     configuration yet. Do not claim they are unavailable — point the user at
@@ -573,10 +579,8 @@ interview flow (§4), feature profiles (§4c, §5), and install methods (§6).
 > Agent Keys), not the API Token used for cloud accounts. The config uses
 > the `features.*` structure — see the Feature Reference (§5) for all keys.
 >
-> **Experimental:** config generation is verified against the Sysdig agent
-> sources, but the guided host flow has not been tested end-to-end. Tell the
-> user this once, and recommend they review the generated config before
-> applying.
+> Provide the full guided experience: collect the answers, generate the config,
+> and walk the user through applying it with the install method they chose.
 
 ---
 
@@ -673,9 +677,10 @@ main conversation clean; the subagent handles retries and verbose output and
 returns a structured result. Per-target check sequences (cloud:
 `terraform state list` + `verify-cloud-status.sh` with backoff; Kubernetes:
 the 5-check Shield sequence (also covers Windows-node pods); Linux hosts: a
-6-check sequence — service/auth/connectivity/credential over journald, plus
-config-error and per-capability checks against `/opt/draios/logs/draios.log`,
-which journald does not carry), the
+7-check sequence — service, driver loaded, auth, connectivity, credential,
+config errors and per-capability state, all read from
+`/opt/draios/logs/draios.log`; journald does not carry the Information-level
+lines these checks look for, and neither does `docker logs`), the
 post-verification **Sysdig Links** block, and the **Internal IDs** display rule
 are in [references/verification.md](references/verification.md). On failure,
 consult [troubleshooting.md](references/troubleshooting.md) and

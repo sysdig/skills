@@ -324,7 +324,18 @@ check_utils() {
 }
 
 check_host() {
-    [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]] && echo "" && echo "Host:"
+    # SCOPE: every probe below inspects THIS machine — the one running the
+    # script. There is no remote mode. If the onboarding target is a different
+    # host (bastion + SSH, or an agent session running off-box), this output
+    # describes the wrong machine and must not be used: copy the script to the
+    # target and run it there. Say so rather than silently reporting local
+    # values as the target's.
+    if [[ "$JSON_MODE" != "true" && "$BLOCKERS_MODE" != "true" ]]; then
+        echo ""
+        echo "Host: (auditing $(hostname) — the machine running this script)"
+        echo "  If the onboarding target is a different host, these results do"
+        echo "  not apply to it. Run this script on the target host instead."
+    fi
 
     # 1. Kernel version (>= 3.10 for eBPF)
     local kver

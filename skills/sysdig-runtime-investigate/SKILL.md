@@ -45,23 +45,23 @@ allowed-tools:
   - mcp__secure-mcp-server__list_runtime_scan_results
   - mcp__secure-mcp-server__get_scan_result
   - mcp__secure-mcp-server__fetch_threat_intelligence_feed
-version: 1.0.1
+  - mcp__secure-mcp-server__get_brand_kit
+  - mcp__secure-mcp-server__get_design_tokens
+version: 1.0.2
 ---
 
-## First-run notice (Public Beta)
+## First-run notice
 
-Before doing any other work for this skill, perform this one-time check:
-
-1. If `~/.config/sysdig-bloom/disclaimer-shown-v1` exists, skip the rest of this section.
-2. Otherwise, display the following message to the user verbatim, preserving the markdown link, in a single message:
-
-   > This plugin is a Public Beta release. It is provided “as is” and “as available,” without warranties of any kind. By installing this plugin, you agree to the Public Beta Terms available in the [repository readme](https://github.com/sysdig/skills#public-beta-terms).
-
-3. Create the marker file `~/.config/sysdig-bloom/disclaimer-shown-v1` using the Write tool (any short content, e.g. the current UTC timestamp). The Write tool creates parent directories automatically and avoids the shell-redirection restrictions imposed by some skills' allowed-tools lists.
-4. Then continue with the user's request.
+Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 
 When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+
+## On-brand output
+
+This skill's case-report HTML is styled from the shared Sysdig brand file (see the reporting templates) — never hand-craft styling. For anything else it renders itself, it carries the brand kit (`get_brand_kit` / `get_design_tokens`) — **Path B** of the shared methodology in [`references/on-brand-output.md`](references/on-brand-output.md).
+
+It does **not** carry the governed author → validate → render tools, so don't call them here: if the user wants a shareable branded **PDF** instead of the HTML case report, hand off to the `sysdig-report` skill if it's installed, and otherwise say the PDF path isn't available in this skill.
 
 ## Input
 
@@ -356,7 +356,7 @@ After handoff, surface the link/key (if any) to the user — one short line.
    - On **Yes** — announce the handoff explicitly per principle C-03 (_"Handing off to `sysdig-runtime-remediate` with `<event_id>`. The case file you just generated will be its starting context."_), then invoke `sysdig-runtime-remediate <event_id>`.
    - On **No** — proceed silently to step 5. The user can always come back later with `/sysdig-runtime-remediate <event_id>` — the case file and shared state will still be there.
 
-   Skip this step if `sysdig-runtime-remediate` is not registered in the current plugin (back-compat for environments running an older Bloom).
+   Skip this step if `sysdig-runtime-remediate` is not registered in the current plugin (back-compat for environments running an older plugin version).
 
 5. **Persist shared state.** Before exiting, call `mcp__secure-mcp-server__save_skill_state` with `{ "skill_state": "runtime-investigate", "version": <version-from-phase-0>, "data": { ... } }`. Merge the freshly-read state from Phase 0 with the new entries: append this case to `recent_cases` (upsert by `event_id`, cap at 10), update `last_run`, and update `preferred_jira_project` / `preferred_handoff` if the user picked a destination. Skip silently if the Sysdig MCP isn't loaded.
 

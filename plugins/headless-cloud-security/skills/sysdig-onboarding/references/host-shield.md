@@ -66,7 +66,7 @@ a YAML file at `/opt/draios/etc/dragent.yaml`.
 | Debian / Ubuntu | x86_64, ARM64 | |
 | CentOS / RHEL / Fedora | x86_64, ARM64 | |
 | Amazon Linux 2 / 2023 | x86_64, ARM64 | |
-| SLES | x86_64 | |
+| SLES | x86_64 | `zypper`, not `yum` — use §6.2b |
 | Alpine | x86_64 | Docker container method only |
 
 ---
@@ -101,7 +101,9 @@ Confirm the detected distro and architecture with the user.
 }
 ```
 
-Auto-select based on distro: Debian/Ubuntu → DEB, CentOS/RHEL/Amazon/SLES → RPM.
+Auto-select based on distro: Debian/Ubuntu → DEB (§6.1),
+CentOS/RHEL/Fedora/Amazon → RPM via yum/dnf (§6.2), SLES → RPM via
+**zypper** (§6.2b — the yum commands do not exist there).
 If Docker is detected but no distro, default to Docker container method.
 
 ### 4c. Feature profile
@@ -173,10 +175,93 @@ All features are configured under `features.*` in the Host Shield config.
 | **Event Forwarder** | `features.investigations.event_forwarder.enabled` | `false` | Forward events to SIEM integrations |
 | **Host Posture** | `features.posture.host_posture.enabled` | `false` | CIS benchmark compliance scanning |
 | **Rapid Response** | `features.respond.rapid_response.enabled` | `false` | Live investigation shell |
-| **Response Actions** | `features.respond.response_actions` | per-action | Automated response (kill, quarantine, capture) |
+| **Response Actions** | `features.respond.response_actions.enabled` **+** per-action `trigger` | `false` | Automated response (kill, quarantine). The trigger map alone arms nothing — see §5.1c |
 | **Host Vuln Scanning** | `features.vulnerability_management.host_vulnerability_management.enabled` | `false` | Scan OS packages for CVEs |
 | **Container Vuln Scanning** | `features.vulnerability_management.container_vulnerability_management.enabled` | `false` | Scan non-orchestrated container images |
 | **In-Use Detection** | `features.vulnerability_management.in_use.enabled` | `true` | Detect actively used vulnerable packages |
+
+### 5.1b Which key the agent runtime actually reads
+
+🔴 **Emit the nested `features.*` tree ONLY. Never also emit the flat
+top-level spelling of the same feature — the agent rejects the pair and
+crash-loops.** The runtime treats the flat and nested spellings as *alternate
+keys*: if both are present it fails to start with
+
+```
+Failed to init configuration. Exception message: live_logs.enabled and
+features.investigations.live_logs.enabled are alternate keys but exist in the
+same yaml file
+```
+
+(exit 70, continuous restart). So "emit both forms, unknown keys are ignored" is
+**wrong** for these keys: the duplicate is fatal, not ignored.
+
+The nested tree alone is honoured. A nested-only config produces a feature
+manager summary (§8 Check 6) that lists selected capabilities as `Enabled` —
+`drift control`, `malware control`, `secure audit`, `network topology`,
+`live logs`, host posture, vulnerability management, and `response actions`
+(given its `enabled` key, §5.1c) — so the nested `features.detections.*` /
+`features.investigations.*` keys are read, not inert.
+
+`captures` is honoured from the nested key too: setting
+`features.investigations.captures.enabled` drives the agent's capture capability
+(it toggles the `memdump` capability in the §8 Check 6 summary — `Enabled` when
+the nested key is `true`, `Disabled` when `false`). The separate on-demand
+`sysdig_capture_enabled` scalar is not something this template sets.
+
+For reference only — these are the flat spellings the Shield chart would write
+on Kubernetes. **Do not put them in the host `dragent.yaml`; they collide with
+the nested tree above.**
+
+| Feature | Nested (emit this) | Flat spelling (do NOT also emit) |
+|---|---|---|
+| Drift Control | `features.detections.drift_control.enabled` | `drift_control.enabled` |
+| Malware Control | `features.detections.malware_control.enabled` | `malware_control.enabled` |
+| Activity Audit | `features.investigations.activity_audit.enabled` | `secure_audit_streams.enabled` |
+| Captures | `features.investigations.captures.enabled` | `sysdig_capture_enabled` (scalar bool) |
+| Live Logs | `features.investigations.live_logs.enabled` | `live_logs.enabled` |
+| Event Forwarder | `features.investigations.event_forwarder.enabled` | `local_forwarder.enabled` |
+| Network Security | `features.investigations.network_security.enabled` | `network_topology.enabled` |
+
+> **Do not read "capability X showed Enabled" as proof the config key worked.**
+> The backend can enable a capability by policy regardless of the file — an
+> observed run had the agent enable `hash_detection` while the config said
+> `enabled: false`. Only a capability that is **off** by default and **on** after
+> your change proves the key was read.
+
+> **`feature.mode` can override these keys.** The agent's mode selector resolves
+> the final feature state, and its per-mode presets set exactly these keys — so a
+> host whose base `dragent.yaml` already carries a `feature.mode` may have the
+> nested `enabled` values here overridden. This skill does not emit `feature.mode`
+> and the interaction is unverified; if a selected capability reads the wrong
+> state in the §8 Check 6 summary, capture `feature.mode` from the config
+> alongside the summary block.
+
+### 5.1c Response actions need an explicit `enabled`
+
+The per-action trigger map does **not** arm the feature:
+
+```yaml
+features:
+  respond:
+    response_actions:
+      enabled: true          # ← without this the whole feature is false
+      kill_process:
+        trigger: all
+```
+
+Omit `enabled` and the agent reports `response actions: Disabled` while every
+config check passes — no `Critical`, no `Config file error at key:`, no "is
+enabled but … is not set". The user consented to remote kill/quarantine when
+they chose the profile, so treat a missing `enabled` as a correctness bug, not
+a nicety. Verify it via the feature summary (§8 Check 6), never by the presence
+of the trigger map.
+
+Actions the config file maps: `kill_process`, `kill_container`,
+`start_container`, `stop_container`, `pause_container`, `unpause_container`,
+`file_quarantine` (+ `quarantine_path`), `file_unquarantine`, `file_acquire`.
+Alongside `enabled`, the feature also accepts `queue_length`, `timeout` and
+`host`.
 
 ### 5.2 Profile → Feature Mapping
 
@@ -194,6 +279,39 @@ All features are configured under `features.*` in the Host Shield config.
 | in_use | — | — | Yes |
 | dns_detection | — | — | Yes |
 | ml_policies | — | — | Yes |
+| live_logs | — | — | — |
+| network_security | — | — | — |
+| event_forwarder | — | — | — |
+| hash_detection | — | — | — |
+| rapid_response | — | — | — |
+
+**A feature with no `Yes` in its row is `false` in that profile — including the
+rows that are `—` everywhere.** Never guess a value for a feature this table
+does not enable: set its nested `enabled` to `false`. Guessing `true` for
+`live_logs` would grant remote log streaming the user never selected. Under the
+**Custom** profile the value is whatever the user explicitly picked, in the
+nested tree only (§5.1b — never emit the flat spelling alongside it).
+
+These profile-varying runtime switches ship as `{{..._ENABLED}}` placeholders
+in the nested tree — `drift_control` (`{{DRIFT_CONTROL_ENABLED}}`),
+`malware_control` (`{{MALWARE_CONTROL_ENABLED}}`), `activity_audit`
+(`{{ACTIVITY_AUDIT_ENABLED}}`), `captures` (`{{CAPTURES_ENABLED}}`), `live_logs`
+(`{{LIVE_LOGS_ENABLED}}`), `network_security` (`{{NETWORK_SECURITY_ENABLED}}`),
+and `response_actions` (`{{RESPONSE_ACTIONS_ENABLED}}`).
+Resolve each to `true`/`false` from its column above; `lint_config.sh` errors on
+any left unresolved, so a switch you forget fails lint rather than shipping a
+value nobody chose. **`response_actions` is a placeholder because it arms remote
+kill/quarantine — a Posture & Compliance profile (where §5.2 marks it `—`) must
+resolve it `false` so those destructive actions are not armed on a host that
+never opted in.** (For the three named profiles `live_logs` and
+`network_security` are always `false`; they are placeholders for the Custom
+profile.) Every other feature carries a fixed value in the template.
+
+`event_forwarder` / `local_forwarder.enabled` is **pinned to `false`** in the
+template, Custom included, until the skill also generates the forwarder's own
+config: on the non-Helm path `local_forwarder.enabled: true` needs a separate
+`local_forwarder_config.yaml`, and without it the agent logs `is enabled but …
+is not set` ⇒ Check 5 FAIL. Offer it as a manual follow-up, not a toggle.
 
 ---
 
@@ -207,18 +325,108 @@ curl -s https://download.sysdig.com/DRAIOS-GPG-KEY.public \
 echo "deb [signed-by=/usr/share/keyrings/sysdig-keyring.asc] https://download.sysdig.com/stable/deb stable-$(dpkg --print-architecture)/" \
   > /etc/apt/sources.list.d/sysdig.list
 apt-get update
+# only needed for kmod / legacy_ebpf — if unavailable see §6.2c
 apt-get install -y linux-headers-$(uname -r)
 apt-get install -y draios-agent
 ```
 
-### 6.2 RPM Package (CentOS / RHEL / Fedora / Amazon Linux / SLES)
+### 6.2 RPM Package (CentOS / RHEL / Fedora / Amazon Linux)
 
 ```bash
 rpm --import https://download.sysdig.com/DRAIOS-GPG-KEY.public
 curl -s -o /etc/yum.repos.d/draios.repo https://download.sysdig.com/stable/rpm/draios.repo
-yum install -y kernel-devel-$(uname -r)
+# only needed for kmod / legacy_ebpf — if unavailable see §6.2c
+yum install -y dkms kernel-devel-$(uname -r)
 yum install -y draios-agent
 ```
+
+`dnf` is a drop-in replacement for `yum` on Fedora, RHEL 8+ and Amazon Linux
+2023 (Amazon Linux 2 has `yum` only). The `kmod` driver additionally needs
+`dkms`, which is in EPEL on RHEL if the base repos do not carry it:
+`yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-<major>.noarch.rpm`.
+`kernel-devel` itself comes from BaseOS — EPEL will **not** fix a missing one
+(that is the running-kernel/repo mismatch in §6.2c).
+
+🔴 **`dkms` must be installed *before* the agent, and it is not preinstalled on
+Amazon Linux 2023.** The `draios-agent-kmodule` package builds the driver from a
+`%post` scriptlet that shells out to `dkms`; without it the scriptlet fails
+while the package manager still reports overall success:
+
+```
+/var/tmp/rpm-tmp.XXXXXX: line 2: dkms: command not found
+warning: %post(draios-agent-kmodule-14.7.2-1.x86_64) scriptlet failed, exit status 127
+Error in POSTIN scriptlet in rpm package draios-agent-kmodule
+```
+
+The agent then runs with no syscall source. Recovery on a host where this
+already happened:
+
+```bash
+dnf install -y dkms
+dnf reinstall -y draios-agent-kmodule
+systemctl restart dragent
+```
+
+Always confirm the driver actually loaded afterwards (§8 Check 1b) — a failed
+kmodule build is invisible to the service, auth and connectivity checks.
+
+### 6.2b SLES (zypper)
+
+SUSE has no `yum`, and `zypper` reads repositories from `/etc/zypp/repos.d/`,
+not `/etc/yum.repos.d/` — the §6.2 command block does **not** work here. The
+kernel headers package is also named per kernel flavor
+(`kernel-default-devel`, `kernel-azure-devel`, `kernel-rt-devel`, …), not
+`kernel-devel`, and must be pinned to the running kernel the same way §6.2
+pins `kernel-devel-$(uname -r)`:
+
+```bash
+rpm --import https://download.sysdig.com/DRAIOS-GPG-KEY.public
+zypper addrepo --refresh https://download.sysdig.com/stable/rpm/draios.repo
+zypper --non-interactive refresh
+# only needed for kmod / legacy_ebpf — if unavailable see §6.2c
+KREL="$(uname -r)"          # e.g. 5.14.21-150500.55.83-default
+zypper --non-interactive install "kernel-${KREL##*-}-devel-${KREL%-*}"
+zypper --non-interactive install draios-agent
+```
+
+> **Derived, not published.** Sysdig's package-install page lists SUSE Linux
+> Enterprise Server as supported but documents `apt` and `yum` commands only —
+> there is no published zypper path. The block above is the SUSE equivalent of
+> §6.2, and is unverified against a live SLES host until an rpm e2e covers it.
+> If `zypper install draios-agent` cannot resolve the repo, verify
+> `/etc/zypp/repos.d/draios.repo` and fall back to the Docker method (§6.3).
+
+### 6.2c Kernel headers are conditional — do not let this block the install
+
+The header/devel package is needed **only** for the `kmod` and `legacy_ebpf`
+drivers. It is routinely unavailable for the running kernel (the repos carry
+headers for the *current* kernel, not the one an unpatched host booted), which
+looks like:
+
+```
+No package kernel-devel-<version> available          # yum / dnf
+E: Unable to locate package linux-headers-<version>  # apt
+```
+
+Two ways forward, in order of preference:
+
+1. **Switch the driver to `universal_ebpf`** — no headers, no compilation,
+   requires kernel 5.8+. On a package install the driver is chosen by the
+   **service environment file**, not by `dragent.yaml`, so set **both**:
+
+   ```bash
+   # /etc/default/dragent (DEB) or /etc/sysconfig/dragent (RPM)
+   SYSDIG_AGENT_DRIVER=universal_ebpf
+   ```
+
+   plus `system.driver_type: universal_ebpf` in the config (§7.4) so the file
+   alone still describes the install, then `systemctl restart dragent`. This is
+   the recommended driver on 5.8+ anyway, and the only option on immutable /
+   container-optimized OS.
+2. Update the kernel, reboot into it, then install the matching headers.
+
+Do not report the header failure as an onboarding failure — pick option 1,
+regenerate the config with the new driver, and continue.
 
 ### 6.3 Docker Container
 
@@ -269,11 +477,13 @@ docker run -d --name sysdig-agent \
 not by the agent config parser. Set `system.driver_type: universal_ebpf` in the
 mounted file as well (§7.4) so the file alone describes the install.
 
-🔴 **The Docker socket must be mounted at the container-internal default,
-`/var/run/docker.sock` — not under `/host`.** The container-vulnerability
-component (`host-scanner`) connects to `unix:///var/run/docker.sock` *inside*
-the container and does not read `system.runtimes.docker[].socket` from the
-config file. Mounted only at `/host/var/run/docker.sock`, it fails fatally:
+🔴 **With the config generated above — which does not set
+`host_scanner.host_fs_mount_path` — the Docker socket must be mounted at the
+container-internal default, `/var/run/docker.sock`, not under `/host`.** The
+container-vulnerability component (`host-scanner`) then connects to
+`unix:///var/run/docker.sock` *inside* the container and does not read
+`system.runtimes.docker[].socket` from the config file. Mounted only at
+`/host/var/run/docker.sock`, it fails fatally:
 
 ```
 host-scanner: failed to connect to the docker API at unix:///var/run/docker.sock: no such file or directory
@@ -286,6 +496,63 @@ feature, it presents as a container that restarts every ~2 seconds while
 `docker ps` still reports `healthy` (§8, Docker liveness). The log shows
 repeated `Sent msgtype=10 (DIRTY_SHUTDOWN_REPORT)` from changing PIDs and no
 `Sent msgtype=1 (METRICS)` at all.
+
+> **Why this differs from the published container example — `host_scanner.host_fs_mount_path`
+> and the socket path are a matched pair.** Sysdig's container example mounts the
+> socket at `/host/var/run/docker.sock` *and* sets
+> `host_scanner.host_fs_mount_path: /host`. That key tells `host-scanner` where
+> the host filesystem is mounted inside the container: with it set the scanner
+> prefixes every host path — the Docker socket included — with `/host`; with it
+> unset it resolves container-internal paths. The config *source* is irrelevant
+> here (the entrypoint merges `ADDITIONAL_CONF` into the same `dragent.yaml`) —
+> only the key decides. **Use one row whole, never one value from each:**
+>
+> | `host_scanner.host_fs_mount_path` | Socket mount | Host VM scans |
+> |---|---|---|
+> | unset | `-v /var/run/docker.sock:/var/run/docker.sock` | the **container's** filesystem — wrong inventory |
+> | `/host` (+ `-v /:/host:ro`) | `-v /var/run/docker.sock:/host/var/run/docker.sock` | the host filesystem |
+>
+> Mixing them — the `/host` socket mount with the key unset — is the crash loop
+> above, observed on a live Docker install.
+
+🔴 **Docker + host vulnerability management requires the second row.** The
+template does not emit `host_scanner.host_fs_mount_path`, which is correct for
+the package path (the host root *is* `/`) but leaves the container path scanning
+its own filesystem — a silent wrong-inventory failure in the same class as the
+`api_url` warning in §7.2, not a crash. When the user selects **host
+vulnerability management** on the Docker method, add to the generated config:
+
+```yaml
+host_scanner:
+  host_fs_mount_path: /host
+kspm_analyzer:
+  host_root: /host          # explicit; the image also defaults SYSDIG_HOST_ROOT=/host
+```
+
+and then mount the socket under `/host` to keep the pair intact:
+
+```bash
+  -v /:/host:ro \
+  -v /var/run/docker.sock:/host/var/run/docker.sock \
+```
+
+Runtime detection, drift, malware, activity audit and response actions are
+unaffected by this key — a Docker install *without* host vulnerability
+management stays on the first row (the command in Step 2 above).
+
+**How to tell which filesystem was scanned** (there is no log line for it):
+compare the package inventory Sysdig reports for the host against the host's own
+package list —
+
+```bash
+dpkg -l | grep -c '^ii'      # Debian/Ubuntu host
+rpm -qa | wc -l              # RPM host
+```
+
+A host scan reports the same order of magnitude and includes host-only packages
+(kernel, `openssh-server`, the distro's init). A container-root scan reports the
+agent image's short list instead, with no kernel package at all — that is the
+signature of a missing `host_fs_mount_path` on the Docker method.
 
 #### Mounts are a function of the selected features
 
@@ -385,6 +652,14 @@ All collectors use port **6443** (`{{COLLECTOR_PORT}}`). For environments where
 6443 is blocked, use the `-alt` region variant (e.g., `us1-alt`) and port
 **443**; the collector host and API URL are unchanged.
 
+> **Prefer the tenant's own value over this table.** Sysdig UI → **Settings →
+> Agent Installation** (and the agent install params it renders) reports the
+> collector for that specific tenant, which can differ from the regional default
+> — a us1 tenant returning `collector-static.sysdigcloud.com` instead of
+> `collector.sysdigcloud.com` is normal and both work. If the user gives you a
+> collector from their tenant, use it verbatim; this table is the fallback for
+> when they do not have it to hand.
+
 For on-prem: set `region: custom` and provide the same `api_url` /
 `collector.host` / `collector.port` keys, pointed at your own endpoints.
 
@@ -410,6 +685,13 @@ system:
   driver_type: universal_ebpf    # kmod | universal_ebpf | legacy_ebpf
   root_path: /
 ```
+
+🔴 **This key alone does not switch the driver on a package install.** The
+DEB/RPM service takes the driver from `SYSDIG_AGENT_DRIVER` in
+`/etc/default/dragent` (DEB) / `/etc/sysconfig/dragent` (RPM), and the container
+takes it from the `-e SYSDIG_AGENT_DRIVER` env var (§6.3) — both read by the
+startup path, not by the config parser. Emit `driver_type` **and** set the
+env var for the install method in use; see §6.2c.
 
 ### 7.5 Proxy
 
@@ -494,12 +776,45 @@ docker rm -f sysdig-agent
 Run these checks proactively after starting the agent. Wait ~60 seconds for
 the agent to initialize.
 
-**Two log sinks, both mandatory.** Checks 1–4 read journald
-(`journalctl -u dragent`); Checks 5–6 read the file sink
-(`/opt/draios/logs/draios.log`, populated because the generated config sets
-`log_persist: true`). Config rejections and silently self-disabled features
-appear **only** in the file sink, so a 4/4 result on journald alone says
-nothing about whether posture or vulnerability scanning actually came up.
+🔴 **Read the FILE sink. journald cannot answer any of these checks.** The
+generated config sets `log_level: warn`, which gates the console/journald sink —
+and every line these checks look for (`Sent msgtype=1 (METRICS)`, the handshake,
+the driver-load line) is **Information** level. It is therefore *never* in
+journald on a correctly configured host, while `/opt/draios/logs/draios.log`
+(populated by `log_persist: true`) has all of them.
+
+Following journald-based checks literally produces a **false failure on a
+perfectly healthy agent** — an observed run reported "the agent has never
+authenticated … the absence of any `Sent msgtype=1` line after 3 retries is
+definitive" while the file sink held five such lines.
+
+Config rejections and self-disabled features (Check 5) were **also** absent from
+journald in that run, but `log_level` does not explain it: those lines are
+`Critical`, which `warn` does not gate. Treat them as file-sink-only on
+observation, cause unknown — do not assume raising `log_level` will surface them.
+
+So: `/opt/draios/logs/draios.log` is the authoritative source for Checks 1b–6
+(needs `sudo`; `docker exec` on a container install). journald is a fallback
+for "is the unit even producing anything" and for warnings/errors only. Raising
+`log_level` to `info` should put the **Information** lines in journald too —
+untested, and it will not help with the `Critical` ones above.
+
+⚠️ **`docker logs` is not an alternative.** It is the console sink, gated by the
+same `log_level: warn`. On a container install read the file sink *inside* the
+container (`docker exec sysdig-agent grep … /opt/draios/logs/draios.log`, no
+`sudo` — the container runs as root); a host-side grep finds nothing because the
+host has no `/opt/draios`.
+
+🔴 **Gate every "no matches" check on the file existing.** Checks 4 and 5 pass on
+*absence* of matches, and `grep` on a missing or unreadable file also yields zero
+matches — a FAIL that reads as a PASS. Run this once before Check 1b:
+
+```bash
+sudo test -s /opt/draios/logs/draios.log || echo "FAIL: file sink missing or empty — log_persist not applied; every 'no matches' below is meaningless"
+```
+
+(Docker install: `docker exec sysdig-agent test -s /opt/draios/logs/draios.log`.)
+If it fails, stop and fix the sink — do not report Checks 2–6 at all.
 
 > **Service name.** The `draios-agent` package registers the systemd unit
 > **`dragent`**, which is what every command below uses. If `systemctl` reports
@@ -556,26 +871,52 @@ signal; a changing PID means the agent is restarting** even if the container
 never did. Zero `Sent msgtype=1` lines together with `Sent msgtype=10
 (DIRTY_SHUTDOWN_REPORT)` lines is the crash loop.
 
-Only after these pass do Checks 2–6 mean anything. For Checks 2–4 use
-`docker logs sysdig-agent` in place of `journalctl -u dragent`; for Checks 5–6
-read the file sink inside the container with `docker exec sysdig-agent grep …`
-(no `sudo` — the container runs as root).
+Only after these pass do Checks 2–6 mean anything. On a container install **all**
+of them read the file sink *inside* the container —
+`docker exec sysdig-agent grep … /opt/draios/logs/draios.log` (no `sudo`, the
+container runs as root). `docker logs sysdig-agent` is the console sink and is
+subject to the same `log_level` gate as journald, so it cannot answer Checks 2–4
+either; use it only for the liveness probes above.
+
+### Check 1b — Driver loaded (package installs)
+
+A failed driver build leaves the agent running with no syscall source, and
+Checks 1–4 all still pass. On rpm hosts this is the `dkms` failure mode from
+§6.2; on any host it is a kernel-headers mismatch.
+
+```bash
+sudo grep -E 'Successfully loaded scap driver|Cannot load the probe' /opt/draios/logs/draios.log
+lsmod | grep sysdigcloud_probe          # kmod driver only
+```
+
+**Expected:** a `Successfully loaded scap driver` line naming the driver
+(`kmod` / `universal_ebpf`), and for `kmod` a loaded `sysdigcloud_probe`
+module. `Cannot load the probe`, or an empty `lsmod` on a `kmod` install, is a
+**FAIL** — see §6.2 (`dkms`) and §9 (headers / driver switch).
 
 ### Check 2 — Agent authentication
 
 ```bash
-journalctl -u dragent --no-pager -n 100 --grep "Sent msgtype=1"
+sudo grep "Sent msgtype=1" /opt/draios/logs/draios.log | tail -5
 ```
 
-**Expected:** At least one `Sent msgtype=1 (METRICS)` line — confirms the
-agent authenticated and is sending data to the Sysdig collector.
+**Expected:** At least one `Sent msgtype=1 (METRICS) len=… to collector at
+host=<collector> port=<port>` line — confirms the agent authenticated and is
+sending data.
 
-If no match, the agent may still be initializing. Wait 30s and retry.
+🔴 **Do not run this against journald — or `docker logs`.** With `log_level: warn`
+these lines are Information-level and reach neither sink, so grepping either one
+for `msgtype=1` returns nothing on a *healthy* agent. That empty result is the
+single most likely cause of a false onboarding failure.
+
+If the file has no match either, the agent may still be initializing — wait 30s
+and retry (and confirm the file itself is non-empty: `sudo tail -n 5
+/opt/draios/logs/draios.log`).
 
 ### Check 3 — Backend connectivity
 
 ```bash
-journalctl -u dragent --no-pager -n 100 --grep "handshake"
+sudo grep -i "handshake" /opt/draios/logs/draios.log | tail -3
 ```
 
 **Expected:** a handshake line such as `handshake exchanged successfully`, or a
@@ -597,26 +938,31 @@ shipping data. Treat this check as supporting evidence only:
 ### Check 4 — Credential validation
 
 ```bash
-journalctl -u dragent --no-pager -n 50 --grep "ERR_INVALID_CUSTOMER_KEY"
+sudo grep "ERR_INVALID_CUSTOMER_KEY" /opt/draios/logs/draios.log
 ```
 
-**Expected:** No matches. If present, the `access_key` is wrong. Host Shield
-needs the **Agent Access Key** (Settings → Agent Keys), NOT the Secure API
-Token.
+**Expected:** No matches — and, like Check 5, that only means anything if the
+file-sink precondition passed; `grep` on a missing file reports no matches too. If
+present, the `access_key` is wrong. Host Shield needs the **Agent Access Key**
+(Settings → Agent Keys), NOT the Secure API Token.
 
 ### Check 5 — Config errors and self-disabled features (file log)
 
 🔴 **journald is not enough.** The config is emitted with `log_persist: true`,
-which routes detail to the **file** sink. Config errors and
-feature-self-disable messages appear only in `/opt/draios/logs/draios.log` and
-**never** in `journalctl -u dragent` — Checks 1–4 pass on an install where a
-selected capability is dead. Always run this check too:
+which routes detail to the **file** sink. In the observed run these messages were
+in `/opt/draios/logs/draios.log` and **not** in `journalctl -u dragent` — note
+that `log_level` does *not* explain it here (these lines are `Critical`, which
+`warn` does not gate), so the cause is unknown and raising `log_level` is not a
+workaround. Checks 1–4 pass on an install where a selected capability is dead, so
+always run this check too:
 
 ```bash
 sudo grep -nE 'Critical|Config file error at key:|is enabled but .* is not set' /opt/draios/logs/draios.log
 ```
 
-**Expected:** no matches. Any hit is a **FAIL** — report the offending key
+**Expected:** no matches — **only meaningful if the file-sink precondition
+above passed**, since `grep` on a missing file also reports no matches. Any hit is
+a **FAIL** — report the offending key
 verbatim, e.g.:
 
 | Log line | Meaning | Fix |
@@ -633,11 +979,61 @@ verbatim, e.g.:
 
 For **each** feature the user chose in §4c, confirm the agent did **not**
 disable it. Nothing in Checks 1–4 covers this: features are self-disabled
-silently when a dependency (usually `api_url`) is missing.
+silently when a dependency (usually `api_url`) is missing, and a feature whose
+enable key the runtime never read (§5.1b, §5.1c) looks identical to one that was
+never selected.
+
+#### 6a. The feature summary is the authoritative answer
+
+The agent prints a per-capability summary at the end of initialization. **Read
+the LAST one only:**
+
+The per-capability lines **precede** the `completed` line, so take the last
+`completed` line's number and read backwards from it. Do not `grep` the whole
+file — that hits the stale first block (see below):
 
 ```bash
+n=$(sudo grep -n "Feature manager initialization completed" /opt/draios/logs/draios.log | tail -1 | cut -d: -f1)
+[ -n "$n" ] || echo "FAIL: no feature summary in the log — the agent never finished initializing"
+sudo sed -n "$(( n > 40 ? n - 40 : 1 )),${n}p" /opt/draios/logs/draios.log
+```
+
+If the block comes back without capability lines, widen it
+(`$(( n > 80 ? n - 80 : 1 ))`) rather than falling back to a whole-file grep.
+
+🔴 **The agent initializes twice, ~12 s apart** — the first pass runs *before*
+the backend handshake and reports almost everything `Disabled`
+(`secure: Disabled, drift control: Disabled, malware control: Disabled, dns
+detection: Disabled, response actions: Disabled, baseliner: Disabled, memdump:
+Disabled`); the second pass flips them to `Enabled`. This is a clean planned
+re-init, **not** a crash — there are no `DIRTY_SHUTDOWN` lines. A naive
+`grep -i disabled` over the whole file hits the stale first summary and reports
+six capabilities dead on a healthy host. Always take the last summary block (by
+line number or PID) and read each capability's state from it, e.g.:
+
+```
+    response actions: Enabled
+    drift control: Enabled
+    malware control: Enabled
+```
+
+Selected-but-`Disabled` in the **last** block ⇒ **FAIL**, and the cause is
+usually a missing enable key rather than a broken host: check that the
+capability's nested `enabled` is set (`response_actions.enabled`, §5.1c) and
+that its flat spelling was **not** also emitted (§5.1b — the pair crash-loops
+the agent, which shows as a restart loop rather than a `Disabled` line).
+
+#### 6b. Component-level confirmation
+
+```bash
+# Hits from the FIRST init block are expected (§HOST-005) — only lines at or
+# after the last "Feature manager initialization completed" ($n from 6a) count.
 sudo grep -niE 'disabl(ing|ed)|not set|is enabled but' /opt/draios/logs/draios.log
 ```
+
+**Expected:** no hits with a line number ≥ `$n`. Hits below `$n` are the stale
+first summary and are **not** a failure — without that filter 6a and 6b return
+contradictory verdicts on the same healthy host.
 
 Then, per capability:
 
@@ -646,6 +1042,7 @@ Then, per capability:
 | Host posture | `sudo grep -i kspm /opt/draios/logs/draios.log` shows the analyzer starting, checks retrieved, events sender enabled, and polling for scan requests | `Disabling KSPM Analyzer` |
 | Host / container vuln scanning | `sudo grep -i host-scanner /opt/draios/logs/draios.log` shows the platform detected (e.g. `detected environment: Saas`), backend scanning enabled, and no URL errors | `no Host in request URL`, `request failed` |
 | Syscall detections / drift / malware / ML | `sudo grep -iE 'policies loaded\|security_mgr' /opt/draios/logs/draios.log` | `Critical` on a `features.detections.*` key |
+| **Response actions** | the last feature summary (6a) shows `response actions: Enabled` | `response actions: Disabled` ⇒ `features.respond.response_actions.enabled` is missing (§5.1c) — the trigger map alone proves nothing |
 
 Report per capability: **live** or **disabled (reason)**. A run where every
 selected capability is not confirmed live is **not** a pass, even at 4/4 on
@@ -672,17 +1069,23 @@ scanned recently") rather than reporting a failure.
 
 | Check | Command | Pass Criteria |
 |-------|---------|---------------|
+| **File sink (precondition)** | `sudo test -s /opt/draios/logs/draios.log` | Non-empty. If it fails, every "no matches" row below is meaningless — stop |
 | Service | `systemctl status dragent` | active (running) |
 | Service (Docker) | `docker inspect … RestartCount State.Running` + `Fatal` / `DIRTY_SHUTDOWN` counts + stable PID | `0 true`, both counts `0`, PID stable — **not** `docker ps` "healthy" |
-| Auth | journalctl grep `Sent msgtype=1` | At least one match |
-| Connectivity | journalctl grep `handshake` | Handshake line **or** an accepted `Sent msgtype=1` (the handshake string is build-dependent) |
-| Credential | journalctl grep `ERR_INVALID_CUSTOMER_KEY` | No matches |
+| Driver | file-log grep `Successfully loaded scap driver` (+ `lsmod` for kmod) | Driver named; no `Cannot load the probe` |
+| Auth | **file-log** grep `Sent msgtype=1` | At least one match |
+| Connectivity | **file-log** grep `handshake` | Handshake line **or** an accepted `Sent msgtype=1` (the handshake string is build-dependent) |
+| Credential | **file-log** grep `ERR_INVALID_CUSTOMER_KEY` | No matches |
 | Config / self-disable | `sudo grep -nE 'Critical\|Config file error at key:\|is enabled but .* is not set' /opt/draios/logs/draios.log` | No matches |
-| Capabilities live | file-log greps per selected feature (Check 6) | Every selected feature armed (published results not required) |
+| Capabilities live | **last** feature summary block + per-feature greps (Check 6) | Every selected feature `Enabled` / armed (published results not required) |
+
+Every row above reads `/opt/draios/logs/draios.log` (root-only, so `sudo`).
+**Neither journald nor `docker logs` is a substitute:** both are the
+console-gated sink, and `log_level: warn` keeps the Information-level lines out of
+them, so those greps return nothing on a healthy host.
 
 For Docker installs: run the Docker Check 1 above instead of `systemctl status`,
-replace `journalctl -u dragent` with `docker logs sysdig-agent`, and read the
-file sink **inside** the container —
+and read the file sink **inside** the container —
 `docker exec sysdig-agent grep -nE '...' /opt/draios/logs/draios.log`
 (the host has no `/opt/draios`, so a host-side grep silently finds nothing).
 
@@ -757,6 +1160,52 @@ Common causes:
 
 ---
 
+### Driver Build Failed Silently — `dkms: command not found` (rpm)
+
+**Symptom:** `yum` / `dnf` reports the install succeeded, but no syscall data
+arrives and the file log has no `Successfully loaded scap driver` line. Scroll
+back through the install output for:
+
+```
+warning: %post(draios-agent-kmodule-…) scriptlet failed, exit status 127
+Error in POSTIN scriptlet in rpm package draios-agent-kmodule
+```
+
+**Cause:** `draios-agent-kmodule` builds the driver from a `%post` scriptlet that
+calls `dkms`, which is not preinstalled on Amazon Linux 2023 (and some minimal
+RHEL images). The package manager treats a failed scriptlet as a warning.
+
+**Fix:**
+
+```bash
+dnf install -y dkms
+dnf reinstall -y draios-agent-kmodule
+systemctl restart dragent
+```
+
+Then re-run §8 Check 1b. Installing `dkms` up front (§6.2) avoids it entirely.
+On hosts where `dkms` or matching headers are unavailable, switch to
+`universal_ebpf` instead (§7.4).
+
+---
+
+### A Capability Shows `Enabled` That the Config Set to `false`
+
+**Symptom:** the feature summary reports a capability as `Enabled` although the
+config has `enabled: false` — most commonly `hash detection`.
+
+**Cause:** the backend can enable capabilities by policy, independently of the
+on-host config. This is not drift and not a config error.
+
+**Fix:** none needed. Two consequences worth remembering:
+
+- Do not chase it as a misconfiguration; change it in the Sysdig policy instead.
+- **Never** use "the summary says Enabled" as proof that a config key was read.
+  Only a capability that is off by default and on after your change proves that
+  (§5.1b).
+
+---
+
 ### Kernel Module / eBPF Probe Load Failure
 
 **Symptom:** Agent starts but logs show `Cannot load the probe`.
@@ -769,16 +1218,29 @@ apt-get install -y linux-headers-$(uname -r)
 
 # CentOS/RHEL — install kernel development headers
 yum install -y kernel-devel-$(uname -r)
+
+# SLES — flavor-specific, pinned to the running kernel (§6.2b)
+KREL="$(uname -r)"; zypper --non-interactive install "kernel-${KREL##*-}-devel-${KREL%-*}"
 ```
 
 After installing headers, restart: `systemctl restart dragent`
 
-If headers are unavailable (container-optimized OS), switch to universal_ebpf:
+If headers are unavailable (container-optimized OS), switch to universal_ebpf.
+On a package install the driver comes from the **service environment file** —
+setting only `system.driver_type` does not change it:
+
+```bash
+# /etc/default/dragent (DEB) or /etc/sysconfig/dragent (RPM)
+SYSDIG_AGENT_DRIVER=universal_ebpf
+```
 
 ```yaml
+# dragent.yaml — keep the file self-describing (§7.4)
 system:
   driver_type: universal_ebpf
 ```
+
+Then `systemctl restart dragent`. See §6.2c for the full fallback order.
 
 ---
 

@@ -54,22 +54,18 @@ allowed-tools:
   - mcp__secure-mcp-server__get_capture_storage
   - mcp__atlassian__getVisibleJiraProjects
   - mcp__atlassian__createJiraIssue
-version: 1.0.1
+version: 1.0.2
 ---
 
-## First-run notice (Public Beta)
+## First-run notice
 
-Before doing any other work for this skill, perform this one-time check:
-
-1. If `~/.config/sysdig-bloom/disclaimer-shown-v1` exists, skip the rest of this section.
-2. Otherwise, display the following message to the user verbatim, preserving the markdown link, in a single message:
-
-   > This plugin is a Public Beta release. It is provided "as is" and "as available," without warranties of any kind. By installing this plugin, you agree to the Public Beta Terms available in the [repository readme](https://github.com/sysdig/skills#public-beta-terms).
-
-3. Create the marker file `~/.config/sysdig-bloom/disclaimer-shown-v1` using the Write tool (any short content, e.g. the current UTC timestamp).
-4. Then continue with the user's request.
+Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 When you need to ask a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available.
+
+## On-brand output
+
+This skill's outputs — response actions and tickets — are rendered by their own systems, so on-brand styling doesn't apply to them. If you're ever asked to produce a custom report or document instead, keep it on-brand per [`references/on-brand-output.md`](references/on-brand-output.md) (or hand off to the `sysdig-report` skill, if it's installed) — opt-in guidance, never a requirement.
 
 ## Input
 
@@ -84,7 +80,7 @@ Three invocation forms:
 The flow is **Steps A through F**, not rigid phases. Steps describe shape; the LLM decides ordering within and across them when the signals support it. The hard guardrails are non-negotiable:
 
 - **Read-only probing runs immediately.** Step B's kubectl/SysQL/AWS reads are read-only; no confirmation gate beyond initial per-session authorization for the surface.
-- **Every destructive action requires its own explicit yes.** Per Bloom S-01 and S-03: no batch confirmation, no implicit consent.
+- **Every destructive action requires its own explicit yes.** No batch confirmation, no implicit consent.
 - **Show before doing.** For every action, restate the exact payload, the expected effect, what it breaks (per [`references/consequence-analysis-guide.md`](references/consequence-analysis-guide.md)), reversibility, and the undo path. Then ask.
 - **Just-in-time authorization for kubectl / AWS.** Detect availability at the start. Only ask to authorize the surface when an action actually needs it. Session-scoped (in-memory only, never persisted).
 - **Narrate every step.** Before every tool call — SysQL query, kubectl, AWS CLI, Response Actions API submission, MCP write — say what you're about to do.
@@ -219,7 +215,7 @@ Only if at least one action ran (status `executed`). Skip if everything was file
 
 ## Error handling
 
-Apply the canonical Bloom three-line error template (**what** / **why** / **fix**) for every failure path. Keep messages under four lines. Examples:
+Apply the standard three-line error template (**what** / **why** / **fix**) for every failure path. Keep messages under four lines. Examples:
 
 > Response Actions API returned 403 on `submit ISOLATE_NETWORK`.
 > Your token is missing the `containment-response-actions.exec` permission.

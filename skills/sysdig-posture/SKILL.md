@@ -22,22 +22,19 @@ allowed-tools:
   - Bash(echo "${SYSDIG_SECURE_API_TOKEN:+SET}")
   - Bash(mkdir -p *)
   - Bash(ls *)
+version: 1.0.1
 ---
 
-## First-run notice (Public Beta)
+## First-run notice
 
-Before doing any other work for this skill, perform this one-time check:
-
-1. If `~/.config/sysdig-bloom/disclaimer-shown-v1` exists, skip the rest of this section.
-2. Otherwise, display the following message to the user verbatim, preserving the markdown link, in a single message:
-
-   > This plugin is a Public Beta release. It is provided “as is” and “as available,” without warranties of any kind. By installing this plugin, you agree to the Public Beta Terms available in the [repository readme](https://github.com/sysdig/skills#public-beta-terms).
-
-3. Create the marker file `~/.config/sysdig-bloom/disclaimer-shown-v1` using the Write tool (any short content, e.g. the current UTC timestamp). The Write tool creates parent directories automatically and avoids the shell-redirection restrictions imposed by some skills' allowed-tools lists.
-4. Then continue with the user's request.
+Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 
 When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+
+## On-brand output
+
+If you're ever asked to generate a custom report or document — not this skill's normal output — keep it on-brand per [`references/on-brand-output.md`](references/on-brand-output.md), or hand off to the `sysdig-report` skill if it's installed. Opt-in guidance, never a requirement.
 
 # Sysdig Posture Assistant
 
@@ -61,7 +58,7 @@ Help users author Posture custom controls and custom policies for Sysdig Secure,
 
 Before any other step, run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. If it tells you to abort, abort — do not call any MCP tools or perform other side effects.
 
-If a tool call later fails during normal operation, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md) to identify the specific failure.
+If a tool call later fails during normal operation, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md) to identify the specific failure. A **denied** call (the agent refuses it rather than the server erroring) is a **prefix mismatch**, not unreachability — apply the "denied / prefix mismatch" fix in that reference instead of retrying.
 
 Do not proceed until the MCP server is reachable. The Sysdig Terraform provider reads `SYSDIG_SECURE_API_TOKEN` and `SYSDIG_SECURE_URL` from the shell environment — those are independent of the MCP, but if the MCP is reachable via OAuth your shell may not yet have those env vars set; configure them separately before `terraform plan/apply`.
 

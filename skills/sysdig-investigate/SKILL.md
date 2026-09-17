@@ -36,23 +36,26 @@ allowed-tools:
   - mcp__secure-mcp-server__list_scope_labels
   - mcp__secure-mcp-server__list_scope_label_values
   - mcp__secure-mcp-server__run_sysql
-version: 1.0.1
+  - mcp__secure-mcp-server__get_plan_report_options
+  - mcp__secure-mcp-server__get_plan_report_data
+  - mcp__secure-mcp-server__save_plan_report
+  - mcp__secure-mcp-server__get_brand_kit
+  - mcp__secure-mcp-server__get_design_tokens
+version: 1.0.2
 ---
 
-## First-run notice (Public Beta)
+## First-run notice
 
-Before doing any other work for this skill, perform this one-time check:
-
-1. If `~/.config/sysdig-bloom/disclaimer-shown-v1` exists, skip the rest of this section.
-2. Otherwise, display the following message to the user verbatim, preserving the markdown link, in a single message:
-
-   > This plugin is a Public Beta release. It is provided “as is” and “as available,” without warranties of any kind. By installing this plugin, you agree to the Public Beta Terms available in the [repository readme](https://github.com/sysdig/skills#public-beta-terms).
-
-3. Create the marker file `~/.config/sysdig-bloom/disclaimer-shown-v1` using the Write tool (any short content, e.g. the current UTC timestamp). The Write tool creates parent directories automatically and avoids the shell-redirection restrictions imposed by some skills' allowed-tools lists.
-4. Then continue with the user's request.
+Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 
 When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+
+## On-brand output
+
+Plan reports → generate a branded PDF via the plan report flow (`get_plan_report_options` → `get_plan_report_data` → `save_plan_report`); the server renders it on-brand, stores it as a plan artifact, and returns a download link (see step 2f — wrap up the Plans session; this is **Path C** in the reference). This skill's other outputs are chat tables and handoffs — not presentation documents.
+
+If you're ever asked to produce a *custom* report or document, follow [`references/on-brand-output.md`](references/on-brand-output.md) within what this skill can actually call: it carries the brand kit (`get_brand_kit` / `get_design_tokens`) for content you render yourself (**Path B**), but not the governed author → validate → render tools — for a PDF outside a Plan, hand off to the `sysdig-report` skill if it's installed. Opt-in guidance — never a requirement to make a report.
 
 This skill **investigates and prioritizes — it never remediates**. It has two flows, chosen in step 1 from the user's goal:
 
@@ -263,7 +266,18 @@ Then go to step 2f.
    )
    ```
    On the free path there is no plan to attach to — give the same summary in chat instead.
-2. Save state (step 4).
+2. **Optional — branded plan report (Plan path).** If the user wants a shareable, on-brand PDF of the plan (beyond the note above), generate one through the report engine rather than hand-writing it.
+
+   **Check first, offer second.** Scan the visible tool names for one ending in `get_plan_report_options` — don't call anything. If it isn't there, this region doesn't serve plan reports yet: skip this step silently, leave the note from step 1 as the session record, and don't mention a PDF you can't produce. Only offer the report when the tool is visible:
+   - `get_plan_report_options(plan_id)` — discover the presets, components, and time ranges for this plan.
+   - `get_plan_report_data(plan_id, preset=…, time_range=…)` — build it from plan data; show the returned **outline** (block titles / types) to confirm scope before saving.
+   - `save_plan_report(plan_id, preset=…, time_range=…, summary=…)` — the server validates, renders the branded PDF, and stores it as a report artifact. On-brand by construction — never hand-write report styling. Check the result before you announce anything:
+     - `saved: true` → give the user the returned `download_path`. If it's `null`, fall back to `source_path`; if both are null, say the report was stored but no download link came back — never print `null` at the user.
+     - `saved: false` → a normal result, not an error: it carries `validation_errors` (JSON-Pointer paths) and a `hint`. Say the report didn't validate, fix those paths, and retry. Don't claim a report was saved.
+     - A **permission** failure on this step is possible even though steps 1–2 worked: saving writes an artifact to the plan, so it needs plan write access where the first two only read. Tell the user they can't store a report on this plan and offer the outline from `get_plan_report_data` instead — don't retry.
+
+   This is **Path C** in [`references/on-brand-output.md`](references/on-brand-output.md) — the one path that persists the report (Path A's `render_report` returns a PDF and stores nothing).
+3. Save state (step 4).
 
 ### 3. Findings flow
 

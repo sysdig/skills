@@ -157,9 +157,15 @@ under `Custom`).
 
 **Omission rules** (the only authorized deviations from the schema):
 - Omit `Architecture` when auto-detection wasn't run.
-- Omit `Driver` when using the default (`kmod`).
 - Omit `Feature Profile` when the `Custom` profile is chosen (the expanded
   `Features` row carries the selection instead).
+
+**Always show `Driver`, including the default `kmod`.** The user was asked about
+it, and it is the row with real consequences: `kmod` compiles a kernel module and
+needs `dkms` + matching kernel headers, which is where package installs fail
+(e.g. Amazon Linux 2023 ships without `dkms` — see
+[host-shield.md §6.2](host-shield.md)). Hiding the default deprives the user of
+the chance to correct it before install.
 
 ## Edit Protocol
 

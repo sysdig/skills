@@ -2,10 +2,19 @@
 #
 # Copy to /opt/draios/etc/dragent.yaml on the target host.
 # Replace all {{PLACEHOLDER}} markers with actual values.
-# Remove feature sections that are not enabled, along with the pair of
-# delimiter comments that wrap them (the "OPEN NAME" / "END NAME" comment
-# lines below). Never introduce that delimiter syntax outside a real pair —
-# scripts/lint_config.sh reads it literally and reports an unclosed marker.
+# Feature switches live in the nested `features.*` tree below and are toggled by
+# their `enabled:` value — keep the block in place; do NOT delete it to disable a
+# feature. The runtime switches that vary by profile are {{..._ENABLED}}
+# placeholders (drift_control, malware_control, activity_audit, captures,
+# live_logs, network_security, and response_actions — the destructive one, which
+# a posture-only profile must resolve to false) — resolve each to true/false from
+# host-shield.md §5.2 so lint fails on any you forget. Do NOT also emit the flat top-level
+# spelling of a feature (`live_logs.enabled`, `network_topology.enabled`, …): the
+# agent treats the flat and nested forms as alternate keys and refuses to start
+# if both are present (exit 70). The only blocks you ever remove are the optional
+# CUSTOM_CA and PROXY sections (their "OPEN NAME" / "END NAME" delimiter pair
+# included) when unused. Never introduce that delimiter syntax outside a real
+# pair — scripts/lint_config.sh reads it literally and reports an unclosed marker.
 #
 # {{SYSDIG_API_URL}}, {{COLLECTOR_HOST}} and {{COLLECTOR_PORT}} are mandatory
 # for every region, SaaS included — resolve them from the region table in
@@ -44,6 +53,20 @@ system:
 log_level: warn
 log_persist: true
 monitoring_port: 8080
+# `log_level` gates the console / journald sink only. Information-level lines —
+# including `Sent msgtype=1 (METRICS)`, the handshake and the driver-load line —
+# are still written to /opt/draios/logs/draios.log, which is why verification
+# reads the FILE sink (host-shield.md §8). Do not "fix" a missing journald line
+# by assuming the agent is broken; raise this to `info` only if you need those
+# lines in journald too.
+
+# Feature switches live ONLY in the nested `features.*` tree below. Do NOT also
+# emit the flat top-level forms (`drift_control.enabled`, `live_logs.enabled`,
+# `secure_audit_streams.enabled`, `network_topology.enabled`,
+# `sysdig_capture_enabled`, …): the agent runtime treats the flat and nested
+# spellings as *alternate keys* and refuses to start if both are present —
+# `Failed to init configuration … are alternate keys but exist in the same yaml
+# file` (exit 70, crash loop). The nested tree alone is honoured; see §5.1b.
 
 # TLS with certificate verification is the default (`ssl: true` +
 # `ssl_verify_certificate: true`) — emit NO ssl keys unless a custom CA is
@@ -81,11 +104,11 @@ features:
       enabled: false
     # === DRIFT_CONTROL ===
     drift_control:
-      enabled: true
+      enabled: {{DRIFT_CONTROL_ENABLED}}
     # === END DRIFT_CONTROL ===
     # === MALWARE_CONTROL ===
     malware_control:
-      enabled: true
+      enabled: {{MALWARE_CONTROL_ENABLED}}
     # === END MALWARE_CONTROL ===
     # === ML_POLICIES ===
     ml_policies:
@@ -97,23 +120,27 @@ features:
   investigations:
     # === ACTIVITY_AUDIT ===
     activity_audit:
-      enabled: true
+      enabled: {{ACTIVITY_AUDIT_ENABLED}}
       commands_enabled: true
       connections_enabled: true
       files_enabled: true
     # === END ACTIVITY_AUDIT ===
     # === CAPTURES ===
     captures:
-      enabled: true
+      enabled: {{CAPTURES_ENABLED}}
     # === END CAPTURES ===
     # === LIVE_LOGS ===
     live_logs:
-      enabled: true
+      enabled: {{LIVE_LOGS_ENABLED}}
     # === END LIVE_LOGS ===
     # === NETWORK_SECURITY ===
     network_security:
-      enabled: true
+      enabled: {{NETWORK_SECURITY_ENABLED}}
     # === END NETWORK_SECURITY ===
+    # Pinned false: enabling the event forwarder on the non-Helm path also needs
+    # a separate local_forwarder_config.yaml, which this skill does not generate
+    # yet — without it the agent logs "is enabled but ... is not set" and §8
+    # Check 5 fails. Offer it as a manual follow-up, not a toggle.
     event_forwarder:
       enabled: false
 
@@ -128,19 +155,37 @@ features:
       enabled: false
     # === RESPONSE_ACTIONS ===
     response_actions:
+      # `enabled` is MANDATORY. The per-action trigger map below does NOT arm
+      # anything on its own — without this key the agent defaults the whole
+      # feature to false and logs "response actions: Disabled" while every
+      # config check still passes. The user consented to remote kill/quarantine
+      # when they picked this profile; this is the key that delivers it — so it
+      # is a placeholder resolved from §5.2, and a profile that does not select
+      # response actions (e.g. Posture & Compliance) MUST resolve it to false so
+      # kill/quarantine is not armed on a host that never opted in.
+      enabled: {{RESPONSE_ACTIONS_ENABLED}}
       kill_process:
         trigger: all
       kill_container:
         trigger: all
-      pause_container:
+      start_container:
         trigger: all
       stop_container:
+        trigger: all
+      pause_container:
+        trigger: all
+      unpause_container:
         trigger: all
       file_quarantine:
         trigger: all
         quarantine_path: ./quarantine
+      file_unquarantine:
+        trigger: all
       file_acquire:
         trigger: all
+      # `capture` is not in the action list the Shield chart maps for this
+      # config file — kept because it is harmless if unrecognised, but do not
+      # promise it to the user as a verified action.
       capture:
         trigger: all
     # === END RESPONSE_ACTIONS ===
@@ -156,6 +201,17 @@ features:
         # string — a YAML list is a fatal config error. To add extra dirs use
         #   host_scanner:
         #     additional_host_dirs_to_scan: "/opt/app,/srv"
+        #
+        # DOCKER INSTALL METHOD ONLY (host-shield.md §6.3): the scanner resolves
+        # host paths relative to host_scanner.host_fs_mount_path, which is
+        # unset here — correct for a package install (the host root IS /), wrong
+        # inside a container, where it inventories the container's filesystem.
+        # On the Docker method add, and pair with -v /:/host:ro plus the socket
+        # at /host/var/run/docker.sock:
+        #   host_scanner:
+        #     host_fs_mount_path: /host
+        #   kspm_analyzer:
+        #     host_root: /host
     # === END HOST_VM ===
     # === CONTAINER_VM ===
     container_vulnerability_management:

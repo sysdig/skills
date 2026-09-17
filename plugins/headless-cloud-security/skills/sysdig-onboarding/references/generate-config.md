@@ -88,14 +88,41 @@ filename at `/opt/draios/etc/dragent.yaml`):
    the agent runtime: without `api_url` host posture and host vulnerability
    scanning are silently disabled, and without `collector.host` every
    non-us1 region silently talks to the us1 collector.
-2. Flip `enabled: true` for each feature in the selected profile and
-   `enabled: false` for the rest, per the profile → feature mapping in
-   [host-shield.md §5.2](host-shield.md).
+2. Set each feature's nested `enabled` per the profile → feature mapping in
+   [host-shield.md §5.2](host-shield.md). The profile-varying runtime switches
+   are `{{..._ENABLED}}` placeholders in the nested tree
+   (`{{DRIFT_CONTROL_ENABLED}}`, `{{MALWARE_CONTROL_ENABLED}}`,
+   `{{ACTIVITY_AUDIT_ENABLED}}`, `{{CAPTURES_ENABLED}}`, `{{LIVE_LOGS_ENABLED}}`,
+   `{{NETWORK_SECURITY_ENABLED}}`, `{{RESPONSE_ACTIONS_ENABLED}}`): resolve each
+   to `true`/`false` from its §5.2 column — `lint_config.sh` errors on any left
+   unresolved. Every other feature ships a fixed value; set it directly per §5.2.
+   Two rules that are easy to miss:
+   - **Nested `features.*` only — never emit the flat spelling of the same
+     feature.** The agent treats the flat form (`drift_control.enabled`,
+     `live_logs.enabled`, `secure_audit_streams.enabled`,
+     `network_topology.enabled`, `sysdig_capture_enabled`, …) and its nested
+     counterpart as *alternate keys*: emitting both crash-loops the agent with
+     `Failed to init configuration … are alternate keys but exist in the same
+     yaml file` (exit 70). The nested tree is honoured on a package/container
+     install — see [host-shield.md §5.1b](host-shield.md). Set every capability
+     in the nested tree only; a feature the §5.2 mapping does not enable is
+     `false` (never guess `true` — `live_logs: true` streams container logs the
+     user did not ask for). `event_forwarder` is pinned `false` in the template.
+   - **Response actions are armed only by `enabled`, and it is destructive.** The
+     per-action trigger map arms nothing on its own — the agent reports
+     `response actions: Disabled` without the key ([host-shield.md §5.1c](host-shield.md)).
+     Resolve `{{RESPONSE_ACTIONS_ENABLED}}` to `true` only for a profile that
+     selected response (Detect & Respond, Full); a Posture & Compliance host must
+     resolve it `false`, or it ships remote kill/quarantine armed on a host that
+     never opted in.
 3. Remove unused PROXY / CUSTOM_CA sections using
    `# === MARKER ===` / `# === END MARKER ===` delimiters.
 4. Run `scripts/lint_config.sh <generated-file>` — it must report `OK` before
    you hand any install command to the user. It catches unresolved
-   `{{PLACEHOLDER}}` tokens and dangling feature markers mechanically.
+   `{{PLACEHOLDER}}` tokens and dangling feature markers mechanically. If you
+   re-lint **after** the user has pasted their Agent Access Key into the file,
+   pass `--user-filled` so the credential-literal warning stays quiet on that
+   expected step (never pass it on a freshly generated file).
 5. Provide install commands from [host-shield.md §6](host-shield.md), branching
    on the install method chosen in §4b. **The generated config is the same file
    in both branches** — there is no env-var configuration path, so a container
@@ -109,9 +136,15 @@ filename at `/opt/draios/etc/dragent.yaml`):
      the access key or collector as `-e` flags (readable via `docker inspect`,
      kept in shell history). Build the mount list from the selected
      features — `-v /:/host:ro` plus `-v /dev:/host/dev` whenever host posture
-     or host vulnerability management is on — and mount the Docker socket at the
-     container-internal path `/var/run/docker.sock` (mounting it under `/host`
-     crash-loops the agent). The container starts on `docker run`
+     or host vulnerability management is on. The Docker socket mount is paired
+     with `host_scanner.host_fs_mount_path` (§6.3): with the key unset (the
+     template's default) mount the socket at the container-internal path
+     `/var/run/docker.sock`; when **host vulnerability management** is selected,
+     add `host_scanner.host_fs_mount_path: /host` +
+     `kspm_analyzer.host_root: /host` to the config and mount the socket at
+     `/host/var/run/docker.sock` instead — otherwise the scanner inventories the
+     container's own filesystem. Never mix a `/host` socket mount with the key
+     unset: that crash-loops the agent. The container starts on `docker run`
      (`--restart always` covers reboots).
    In both branches the **user** fills the Agent Access Key by editing the file;
    the skill never puts it on a command line or asks for it in chat.

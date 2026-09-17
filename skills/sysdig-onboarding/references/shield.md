@@ -359,6 +359,15 @@ kubectl logs -n sysdig-agent -l sysdig/component=cluster --tail=50
 - Connection refused / timeout → **FAIL** — check region setting, proxy
   config, or firewall rules blocking port 443.
 
+> **A missing handshake line is not a failure by itself.** The wording is
+> build-dependent — some agent builds emit no `handshake` line at all on a
+> healthy install. Either of the other two signals from these same cluster logs
+> (`component ready`, `loaded N rules`) is sufficient to pass. Treat it as a
+> **FAIL** only when none of the three appear, or when the logs show connection
+> refused / timeout. Do not substitute Check 3's `Sent msgtype=1 (METRICS)` —
+> that is the Host Shield pod's connection, a different component, and Check 3
+> is skipped entirely on GKE Autopilot and EKS Fargate.
+
 #### Check 5 — Driver health (if Host Shield pods fail)
 
 Only needed if Host Shield pods are in `Init:CrashLoopBackOff`:
@@ -380,7 +389,7 @@ kubectl logs -n sysdig-agent <host-pod> -c sysdig-host-shield-kmodule --tail=20
 | Pod status | `kubectl get pods -n sysdig-agent` | All Running |
 | DaemonSet | `kubectl get ds -n sysdig-agent` | DESIRED == READY |
 | Agent auth | Host Shield logs | `Sent msgtype=1 (METRICS)` present, no `ERR_INVALID_CUSTOMER_KEY` |
-| Backend | Shield cluster logs | `handshake exchanged successfully` present |
+| Backend | Shield cluster logs | Any of: handshake line, `component ready`, `loaded N rules` (the handshake string is build-dependent) |
 | Driver | Host Shield init logs | No `Cannot load the probe` errors |
 
 ---

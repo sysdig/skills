@@ -18,6 +18,14 @@ Use `AskUserQuestion` where the option set is bounded; otherwise confirm freefor
 | Remediation details | What a reader should do when the control fires | Required, non-empty |
 | Target directory | Where `.tf` + `.rego` should land | Default: cwd |
 
+> **Known limitation:** creating a custom control for a **Kubernetes** resource
+> kind currently fails at the `terraform apply` step with an API error — this
+> is a backend defect, not a problem with your Rego or Terraform. Cloud
+> resource kinds (`AWS_*`, `AZURE_*`, `GCP_*`, etc.) are unaffected. If the
+> user's intent points at a Kubernetes kind, say so before writing any Rego —
+> the workflow can still validate the Rego with `test_posture_rego`, but the
+> `terraform apply` at the end will not succeed.
+
 ## Steps
 
 Preflight (MCP availability, local tools, Terraform credentials) is handled in [SKILL.md](../SKILL.md#prerequisites) before routing here — assume it has passed.

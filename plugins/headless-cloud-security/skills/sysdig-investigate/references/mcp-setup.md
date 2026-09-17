@@ -8,10 +8,10 @@ A Model Context Protocol server, hosted by Sysdig per region, that exposes your 
 
 - **Transport**: HTTP (streamable, MCP-compliant).
 - **Registration name**: `secure-mcp-server` — keep this exact name; anything else makes the server harder to find and debug. The skills refer to its tools by the fully-qualified prefix `mcp__secure-mcp-server__*`. If you register the server under a different name — or use a pre-onboarded, organization- or plugin-managed Sysdig connector — the prefix becomes `mcp__<your-server-name>__*` and must be reconciled with the skills' `allowed-tools`, or calls come back **denied** (see [Tool calls come back denied](#tool-calls-come-back-denied-prefix-mismatch)).
-- **Authentication**: OAuth. The first time a skill needs the server, you authenticate once in your browser and the agent stores the session token. There is no API token to copy or paste.
+- **Authentication**: OAuth is the default, documented path. The first time a skill needs the server, you authenticate once in your browser and the agent stores the session token — no API token to copy or paste. (A Bearer-token alternative exists for headless/CI use — see below.)
 - **Some of the tools it exposes**: `get_customer_settings`, `list_zones`, `query_vulnerability_findings`, `run_sysql`, `generate_sysql`, `test_posture_rego`, `list_runtime_events`, `get_skill_state`, `save_skill_state`.
 
-> **Using an API token instead of OAuth** (for headless / CI environments that can't drive a browser) is a feature of the Sysdig MCP server itself, configured at registration time by adding an `Authorization: Bearer <token>` request header. See the Sysdig MCP server documentation for token-based setup. The skills work identically in either mode.
+> **Using an API token instead of OAuth** (for headless / CI environments that can't drive a browser) is configured at registration time by adding an `Authorization: Bearer <token>` request header, rather than by anything in the skills — they work identically in either mode. This is a feature of the MCP server itself, not something the skills document or manage.
 
 ## Per-region URLs
 
@@ -21,14 +21,16 @@ The hosted MCP server lives at `<region-url>/mcp/secure`. Find your region's row
 |---|---|---|---|
 | US East (N. Virginia) | us1 | `https://secure.sysdig.com` | `https://secure.sysdig.com/mcp/secure` |
 | US West (Oregon) | us2 | `https://us2.app.sysdig.com` | `https://us2.app.sysdig.com/mcp/secure` |
+| US West (GCP) | us3 | `https://app.us3.sysdig.com` | `https://app.us3.sysdig.com/mcp/secure` |
 | US West (Dallas) | us4 | `https://app.us4.sysdig.com` | `https://app.us4.sysdig.com/mcp/secure` |
 | EU Central (Frankfurt) | eu1 | `https://eu1.app.sysdig.com` | `https://eu1.app.sysdig.com/mcp/secure` |
 | EU North (Stockholm) | eu2 | `https://app.eu2.sysdig.com` | `https://app.eu2.sysdig.com/mcp/secure` |
 | Asia Pacific (Sydney) | au1 | `https://app.au1.sysdig.com` | `https://app.au1.sysdig.com/mcp/secure` |
 | Asia Pacific (Mumbai) | in1 | `https://app.in1.sysdig.com` | `https://app.in1.sysdig.com/mcp/secure` |
+| Asia Pacific (Tokyo) | jp1 | `https://app.jp1.sysdig.com` | `https://app.jp1.sysdig.com/mcp/secure` |
 | Middle East (Dammam) | me2 | `https://app.me2.sysdig.com` | `https://app.me2.sysdig.com/mcp/secure` |
 
-> **If your region isn't in the table above**, the hosted MCP server isn't available there — the table is the source of truth for where it's reachable. Tenants in an unlisted region can still use these skills by self-hosting the Sysdig MCP server and registering that URL instead.
+> **If your region isn't in the table above**, the hosted MCP server isn't available there — the table is the source of truth for where it's reachable. Contact your Sysdig representative about availability for your region; these skills need the hosted server, and there is no supported way to stand in for it yourself.
 
 > If you're unsure of your region, sign in to Sysdig Secure in your browser and read the hostname from the URL bar — that's your UI URL; append `/mcp/secure` to get the MCP server URL.
 

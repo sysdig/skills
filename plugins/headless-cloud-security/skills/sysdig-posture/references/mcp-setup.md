@@ -7,11 +7,11 @@ The Sysdig MCP server gives the Sysdig skills direct, read access to your Sysdig
 A Model Context Protocol server, hosted by Sysdig per region, that exposes your Sysdig Secure tenant's data as tools your agent can call.
 
 - **Transport**: HTTP (streamable, MCP-compliant).
-- **Registration name**: `secure-mcp-server` — keep this exact name; anything else makes the server harder to find and debug.
-- **Authentication**: OAuth. The first time a skill needs the server, you authenticate once in your browser and the agent stores the session token. There is no API token to copy or paste.
-- **Some of the tools it exposes**: `get_customer_settings`, `list_zones`, `list_vulnerability_findings_by_image`, `run_sysql`, `generate_sysql`, `test_posture_rego`, `list_runtime_events`, `get_skill_state`, `save_skill_state`.
+- **Registration name**: `secure-mcp-server` — keep this exact name; anything else makes the server harder to find and debug. The skills refer to its tools by the fully-qualified prefix `mcp__secure-mcp-server__*`. If you register the server under a different name — or use a pre-onboarded, organization- or plugin-managed Sysdig connector — the prefix becomes `mcp__<your-server-name>__*` and must be reconciled with the skills' `allowed-tools`, or calls come back **denied** (see [Tool calls come back denied](#tool-calls-come-back-denied-prefix-mismatch)).
+- **Authentication**: OAuth is the default, documented path. The first time a skill needs the server, you authenticate once in your browser and the agent stores the session token — no API token to copy or paste. (A Bearer-token alternative exists for headless/CI use — see below.)
+- **Some of the tools it exposes**: `get_customer_settings`, `list_zones`, `query_vulnerability_findings`, `run_sysql`, `generate_sysql`, `test_posture_rego`, `list_runtime_events`, `get_skill_state`, `save_skill_state`.
 
-> **Using an API token instead of OAuth** (for headless / CI environments that can't drive a browser) is a feature of the Sysdig MCP server itself, configured at registration time by adding an `Authorization: Bearer <token>` request header. See the Sysdig MCP server documentation for token-based setup. The skills work identically in either mode.
+> **Using an API token instead of OAuth** (for headless / CI environments that can't drive a browser) is configured at registration time by adding an `Authorization: Bearer <token>` request header, rather than by anything in the skills — they work identically in either mode. This is a feature of the MCP server itself, not something the skills document or manage.
 
 ## Per-region URLs
 
@@ -21,14 +21,16 @@ The hosted MCP server lives at `<region-url>/mcp/secure`. Find your region's row
 |---|---|---|---|
 | US East (N. Virginia) | us1 | `https://secure.sysdig.com` | `https://secure.sysdig.com/mcp/secure` |
 | US West (Oregon) | us2 | `https://us2.app.sysdig.com` | `https://us2.app.sysdig.com/mcp/secure` |
+| US West (GCP) | us3 | `https://app.us3.sysdig.com` | `https://app.us3.sysdig.com/mcp/secure` |
 | US West (Dallas) | us4 | `https://app.us4.sysdig.com` | `https://app.us4.sysdig.com/mcp/secure` |
 | EU Central (Frankfurt) | eu1 | `https://eu1.app.sysdig.com` | `https://eu1.app.sysdig.com/mcp/secure` |
 | EU North (Stockholm) | eu2 | `https://app.eu2.sysdig.com` | `https://app.eu2.sysdig.com/mcp/secure` |
 | Asia Pacific (Sydney) | au1 | `https://app.au1.sysdig.com` | `https://app.au1.sysdig.com/mcp/secure` |
 | Asia Pacific (Mumbai) | in1 | `https://app.in1.sysdig.com` | `https://app.in1.sysdig.com/mcp/secure` |
+| Asia Pacific (Tokyo) | jp1 | `https://app.jp1.sysdig.com` | `https://app.jp1.sysdig.com/mcp/secure` |
 | Middle East (Dammam) | me2 | `https://app.me2.sysdig.com` | `https://app.me2.sysdig.com/mcp/secure` |
 
-> **If your region isn't in the table above**, the hosted MCP server isn't available there — the table is the source of truth for where it's reachable. Tenants in an unlisted region can still use these skills by self-hosting the Sysdig MCP server and registering that URL instead.
+> **If your region isn't in the table above**, the hosted MCP server isn't available there — the table is the source of truth for where it's reachable. Contact your Sysdig representative about availability for your region; these skills need the hosted server, and there is no supported way to stand in for it yourself.
 
 > If you're unsure of your region, sign in to Sysdig Secure in your browser and read the hostname from the URL bar — that's your UI URL; append `/mcp/secure` to get the MCP server URL.
 
@@ -101,3 +103,16 @@ When the MCP server isn't reachable, **do not show a generic message**. Run thes
 4. **Local override?** A `secure-mcp-server` entry hardcoded in a project `.mcp.json`, `.claude/settings.local.json`, or `~/.claude/settings.json` takes precedence over your registration. If it points at the wrong region, remove or correct it.
 
 Report exactly what failed, what you checked, and the specific fix. Do not dump this entire checklist to the user.
+
+### Tool calls come back denied (prefix mismatch)
+
+A **denied** tool call — the agent refuses to make the call rather than the server returning an error — is **not** an auth or reachability failure. It almost always means a **prefix mismatch**: the skills list their tools as `mcp__secure-mcp-server__*`, but the server is registered under a different prefix in this agent. This is common when the server was registered under another name, or when using a pre-onboarded, organization- or plugin-managed Sysdig connector (e.g. `mcp__claude_ai_<Connector-Name>_Sysdig_Secure_MCP_Server__*`). The bare tool names match 1:1 — only the prefix differs.
+
+**Read the real prefix straight from the denied call** — the tool name in the error is the fully-qualified `mcp__<actual-server-name>__<tool>`, so it hands you the exact `mcp__<actual-server-name>__*` pattern to use below. Then pick the fix that matches how the server is registered (this is a change to *your agent's own configuration*, not to the skill files):
+
+- **Locally registered under a different name** — it appears in `claude mcp list`. Either **re-register** it as `secure-mcp-server` (the mandated name above) so the skills' prefixes match as-is, or grant the actual `mcp__<actual-server-name>__*` pattern in your agent's tool-permission settings.
+- **Pre-onboarded / organization- or plugin-managed connector** — it will **not** appear in `claude mcp list` and you cannot re-register it. Grant the actual `mcp__<actual-server-name>__*` pattern in your agent's tool-permission settings.
+
+Resolve the prefix first, then re-run. Do not loop retrying the denied call.
+
+> **The `mcp__…__` naming is Claude Code's convention.** The `mcp__<server>__<tool>` tool names — and the `mcp__<name>__*` permission pattern — are how Claude Code namespaces MCP tools. Other spec-compatible clients (Cursor, OpenAI Codex, OpenCode, …) expose the *same* tools (identical bare names) under their own naming and permission scheme; consult your client's MCP documentation for how it prefixes and grants them.

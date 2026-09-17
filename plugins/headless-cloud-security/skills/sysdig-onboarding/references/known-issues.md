@@ -169,6 +169,74 @@ Each entry follows this structure:
 
 ---
 
+### [HOST-003] `draios-agent-kmodule` driver build fails silently without `dkms` (Amazon Linux 2023)
+
+- **Affected:** Linux host / rpm install / Amazon Linux 2023 (and minimal RHEL images)
+- **Severity:** High
+- **Description:** The kmodule package builds the driver from an RPM `%post`
+  scriptlet that shells out to `dkms`, which is not preinstalled. The scriptlet
+  fails with `dkms: command not found` (exit status 127) but `yum`/`dnf` reports
+  the transaction as successful, so the agent starts with no syscall source while
+  the service, auth, connectivity and credential checks all pass.
+- **Workaround:** Install `dkms` before the agent
+  (`yum install -y dkms kernel-devel-$(uname -r)`). On an affected host:
+  `dnf install -y dkms && dnf reinstall -y draios-agent-kmodule && systemctl restart dragent`.
+  Confirm with `Successfully loaded scap driver` in
+  `/opt/draios/logs/draios.log` plus `lsmod | grep sysdigcloud_probe`. Where
+  `dkms` or matching headers are unavailable, use the `universal_ebpf` driver.
+- **Status:** Open (packaging: a failed driver build should fail the install)
+- **References:** —
+
+---
+
+### [HOST-004] Telemetry log lines never reach journald at the default log level
+
+- **Affected:** Linux host / all install methods
+- **Severity:** High
+- **Description:** `Sent msgtype=1 (METRICS)`, the collector handshake and the
+  driver-load line are all **Information** level. With `log_level: warn` — a
+  common setting, and the one the generated config uses — the console/journald
+  sink drops them, so `journalctl -u dragent --grep "Sent msgtype=1"` returns
+  nothing on a fully healthy agent. Verification that reads journald concludes
+  the agent never authenticated. `docker logs` is the same console sink under the
+  same gate, so it fails identically on container installs.
+  Config rejections and self-disabled features were also missing from journald in
+  the observed run, but `log_level` does not explain those: they are `Critical`,
+  which `warn` does not gate. Cause unknown — read them from the file sink on
+  observation, not on this theory.
+- **Workaround:** Read `/opt/draios/logs/draios.log` (written because
+  `log_persist: true`; root-only, so `sudo`, or `docker exec` for a container
+  install). Raising `log_level` to `info` should surface the Information lines in
+  journald (untested) and will not help with the `Critical` ones.
+- **Status:** Working as designed for the Information lines (log-level
+  semantics); documentation issue. The `Critical` half is unexplained.
+- **References:** —
+
+---
+
+### [HOST-005] The agent initializes twice; the first feature summary reports almost everything disabled
+
+- **Affected:** Linux host / all install methods
+- **Severity:** Low
+- **Description:** The agent runs two initialization passes ~12 s apart. The
+  first happens before the backend handshake and logs a feature summary with
+  `secure`, drift control, malware control, dns detection, response actions,
+  baseliner and memdump all `Disabled`; the second flips them to `Enabled`.
+  There are no `DIRTY_SHUTDOWN` lines — it is a planned re-init, not a crash. A
+  verification that greps the whole log for `disabled` hits the stale first
+  summary and reports healthy capabilities as dead.
+- **Workaround:** Read only the **last** `Feature manager initialization
+  completed` block and take each capability's state from it. The capability lines
+  precede that line, so slice backwards from its line number:
+  `n=$(sudo grep -n "Feature manager initialization completed" /opt/draios/logs/draios.log | tail -1 | cut -d: -f1)`
+  then `sudo sed -n "$(( n > 40 ? n - 40 : 1 )),${n}p" …`. A whole-file grep also
+  hits the stale block, so any `disabl*` hit below `$n` is expected, not a
+  failure.
+- **Status:** Working as designed
+- **References:** —
+
+---
+
 ### [HOST-002] Re-onboarding the same host publishes no new posture/vulnerability results
 
 - **Affected:** Linux host / all install methods
@@ -184,6 +252,38 @@ Each entry follows this structure:
   accepted, checks retrieved, backend reachable) rather than that results were
   published. Results appear on the backend's next scheduled scan for that host.
 - **Status:** Working as designed (backend deduplication)
+- **References:** —
+
+---
+
+### [HOST-006] Agent crash-loops when a feature is set in both its flat and nested form
+
+- **Affected:** Linux host / all install methods
+- **Severity:** High
+- **Description:** The agent runtime treats the flat top-level feature switch
+  (e.g. `live_logs.enabled`, `drift_control.enabled`,
+  `secure_audit_streams.enabled`, `network_topology.enabled`,
+  `sysdig_capture_enabled`) and its nested `features.*` counterpart as
+  **alternate keys**. If both appear in `dragent.yaml` the agent fails to start:
+  `Failed to init configuration. Exception message: live_logs.enabled and
+  features.investigations.live_logs.enabled are alternate keys but exist in the
+  same yaml file`, exits 70, and (under `--restart always` / systemd) restarts
+  continuously. On the Docker method this can present as a container that
+  restarts every ~2 s while `docker ps` still reports `healthy`.
+- **Workaround:** Emit each feature in **one** form only. Use the nested
+  `features.*` tree and do not also emit the flat spelling. Response actions are
+  gated by the same mechanism — resolve `features.respond.response_actions.enabled`
+  from the profile's §5.2 row (via the `{{RESPONSE_ACTIONS_ENABLED}}` placeholder),
+  not hardcoded `true`; a profile that does not select response (e.g. Posture &
+  Compliance) must resolve it `false` so remote kill/quarantine is not armed.
+- **Status:** Fixed — the generated config uses the nested tree only. Confirmed
+  live on the **container (Docker)** method: no init crash, and the nested keys
+  are honoured — including `captures`, which drives the `memdump` capability
+  (`Enabled` for nested `captures: true`, `Disabled` for `false`), so it is not
+  silently lost. The **rpm** package method also accepted the nested-only config
+  in a prior run. Package-method confirmation on **deb** is the one remaining
+  live check; the config parser is the same agent binary across methods, so the
+  behaviour is expected to be identical.
 - **References:** —
 
 ---

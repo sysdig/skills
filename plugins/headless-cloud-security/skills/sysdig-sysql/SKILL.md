@@ -17,22 +17,18 @@ allowed-tools:
   - mcp__secure-mcp-server__generate_sysql
   - mcp__secure-mcp-server__get_sysql_entity
   - mcp__secure-mcp-server__list_sysql_entities
-version: 1.0.1
+version: 1.0.2
 ---
 
-## First-run notice (Public Beta)
+## First-run notice
 
-Before doing any other work for this skill, perform this one-time check:
-
-1. If `~/.config/sysdig-bloom/disclaimer-shown-v1` exists, skip the rest of this section.
-2. Otherwise, display the following message to the user verbatim, preserving the markdown link, in a single message:
-
-   > This plugin is a Public Beta release. It is provided "as is" and "as available," without warranties of any kind. By installing this plugin, you agree to the Public Beta Terms available in the [repository readme](https://github.com/sysdig/skills#public-beta-terms).
-
-3. Create the marker file `~/.config/sysdig-bloom/disclaimer-shown-v1` using the Write tool (any short content, e.g. the current UTC timestamp). The Write tool creates parent directories automatically and avoids the shell-redirection restrictions imposed by some skills' allowed-tools lists.
-4. Then continue with the user's request.
+Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+
+## On-brand output
+
+This skill's output is SysQL query results (tables in chat), not a presentation document. If you're ever asked to turn results into a custom report or document, keep it on-brand per [`references/on-brand-output.md`](references/on-brand-output.md) (or hand off to the `sysdig-report` skill, if it's installed) — opt-in guidance, never a requirement.
 
 # SysQL Query Language
 

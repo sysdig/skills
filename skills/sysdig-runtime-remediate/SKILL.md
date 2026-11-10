@@ -54,14 +54,14 @@ allowed-tools:
   - mcp__secure-mcp-server__get_capture_storage
   - mcp__atlassian__getVisibleJiraProjects
   - mcp__atlassian__createJiraIssue
-version: 1.0.2
+version: 1.0.3
 ---
 
 ## First-run notice
 
 Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
-When you need to ask a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available.
+This skill describes steps by capability, not by tool name: *ask a structured question*, *get explicit confirmation*, *write a file*, *run a command*. Follow [`references/agent-capabilities.md`](references/agent-capabilities.md) for how to do each one with your agent's tools, and what to do when a capability is missing — including when nobody can answer a question.
 
 ## On-brand output
 
@@ -80,7 +80,7 @@ Three invocation forms:
 The flow is **Steps A through F**, not rigid phases. Steps describe shape; the LLM decides ordering within and across them when the signals support it. The hard guardrails are non-negotiable:
 
 - **Read-only probing runs immediately.** Step B's kubectl/SysQL/AWS reads are read-only; no confirmation gate beyond initial per-session authorization for the surface.
-- **Every destructive action requires its own explicit yes.** No batch confirmation, no implicit consent.
+- **Every destructive action requires its own explicit yes.** No batch confirmation, no implicit consent. If no yes comes back — for example in a non-interactive run — stop with the proposal; never execute on silence.
 - **Show before doing.** For every action, restate the exact payload, the expected effect, what it breaks (per [`references/consequence-analysis-guide.md`](references/consequence-analysis-guide.md)), reversibility, and the undo path. Then ask.
 - **Just-in-time authorization for kubectl / AWS.** Detect availability at the start. Only ask to authorize the surface when an action actually needs it. Session-scoped (in-memory only, never persisted).
 - **Narrate every step.** Before every tool call — SysQL query, kubectl, AWS CLI, Response Actions API submission, MCP write — say what you're about to do.
@@ -104,7 +104,7 @@ Run all of these before Step A. Surface a single one-line connectivity summary a
 
 1. **Trust preamble.** Present [`references/trust-preamble.md`](references/trust-preamble.md) verbatim. Do not pause for confirmation; the preamble is informational.
 2. **MCP authentication preflight (hard-block).** Run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. This skill requires the Sysdig MCP for state, event lookups, and Response Actions — degraded mode is not supported. If the preflight returns State 2 (registered but not authenticated) or State 3 (not reachable), emit its verbatim message and **stop** — no data calls, no state read, no file writes.
-3. **Response Actions canary.** Call `mcp__secure-mcp-server__list_response_actions` once (no arguments). If it errors, surface the message and stop — the Response Actions API is unreachable, so nothing can be remediated. Success only proves the API is reachable and returns the tenant-wide **capability catalog** — it does **not** mean any given action can execute on *this* cluster or host. Per-scope **responder availability** (a CLUSTER responder may not be deployed on the target cluster) and **remote-storage configuration** (needed by output-producing actions) are tenant/cluster-specific and are confirmed later, in Step C and at submit time. Do not promise the user an action is runnable on the strength of this canary alone.
+3. **Response Actions canary.** Call `list_response_actions` once (no arguments). If it errors, surface the message and stop — the Response Actions API is unreachable, so nothing can be remediated. Success only proves the API is reachable and returns the tenant-wide **capability catalog** — it does **not** mean any given action can execute on *this* cluster or host. Per-scope **responder availability** (a CLUSTER responder may not be deployed on the target cluster) and **remote-storage configuration** (needed by output-producing actions) are tenant/cluster-specific and are confirmed later, in Step C and at submit time. Do not promise the user an action is runnable on the strength of this canary alone.
 4. **kubectl & AWS availability detection (no authorization yet).** Run `command -v kubectl` and `command -v aws`. Record availability. Do **not** ask to authorize either surface yet; that happens in Step D when an action actually needs it.
 5. **Ticketing probe (no-block).** Look for `mcp__atlassian__*` (Jira) and the standard PagerDuty env vars. Used by the file-as-ticket fallback in Step D.
 
@@ -118,9 +118,9 @@ Goal: load the threat into memory along with an explicit **inventory** of what's
 
 1. **Resolve the input.**
    - Auto-handoff or `<event_id>` argument → load the case directly.
-   - No argument → ask for an event ID via `AskUserQuestion`.
+   - No argument → ask the user for an event ID.
 2. **Find the prior case file.** Look for `/tmp/sysdig-runtime-investigate-<event_id_short>-*.md`. If it exists, read it and treat the contents as authoritative for what the threat is and where it lives.
-3. **Gating prompt — no prior case.** If no case file exists, ask via `AskUserQuestion` how to proceed:
+3. **Gating prompt — no prior case.** If no case file exists, ask a structured question on how to proceed:
    - **Auto-investigate (recommended)** — announce the handoff and invoke `sysdig-runtime-investigate <event_id>`. When it completes, read the new case file and continue.
    - **Lightweight** — do minimal inline investigation in Step B (process tree, immediate workload metadata, no cross-cluster sweep). No case file written.
    - **Raw** — proceed without investigation. Banner-warn: _"Consequence analysis will be best-effort — much of Step B will say 'unknown'."_
@@ -150,14 +150,14 @@ Goal: produce the mini-map described in [`references/consequence-analysis-guide.
 
 Goal: a single, ordered checklist of candidate actions, each with its full consequence analysis. Accept user response as either checkbox selections or natural language.
 
-1. **Discover applicable actions.** Call `mcp__secure-mcp-server__list_response_actions` with `context_event_id: <event_id>` to get Sysdig's tenant-specific catalog with parameter schemas, scoped to the event's responder context. Two outcomes:
+1. **Discover applicable actions.** Call `list_response_actions` with `context_event_id: <event_id>` to get Sysdig's tenant-specific catalog with parameter schemas, scoped to the event's responder context. Two outcomes:
    - **Non-empty** → treat it as the executable set for this event; propose only from it.
    - **Empty (`{"data":[]}`)** → this is **inconclusive, not "nothing is possible"** (the API can't always resolve responder availability from event context alone). Fall back to the full catalog (call `list_response_actions` with no `context_event_id`) and apply the availability preflight below.
 
    Pair the catalog with the threat patterns in [`references/threat-patterns.md`](references/threat-patterns.md) and your reasoning over the investigation + probe findings.
 2. **Availability preflight (before you propose).** There is no read-only "list responders / storage config" endpoint, so confirm what can actually run using the cheap signals available, and be honest about residual uncertainty:
-   - **Responder scope.** Every action has a `responderType` (`HOST` / `CLUSTER` / `CLOUD`). A CLUSTER responder may not be deployed on the target cluster; submitting then returns HTTP 400 `responder_not_found`. Use `list_response_actions` with `context_event_id` (if non-empty) and `mcp__secure-mcp-server__list_response_action_executions` (which `responderType`s have recently **completed** in this tenant) as hints. When unconfirmed, label the action's availability `unconfirmed` rather than `available`.
-   - **Storage dependency.** `GET_LOGS`, `CAPTURE`, and `FILE_ACQUIRE` write artifacts and require capture storage; without it they return HTTP 412 `storage_not_configured`. Before proposing them, call `mcp__secure-mcp-server__get_capture_storage`: if it returns `isEnabled: false` or no bucket, mark these storage-dependent actions `unavailable` up front rather than discovering the 412 at submit.
+   - **Responder scope.** Every action has a `responderType` (`HOST` / `CLUSTER` / `CLOUD`). A CLUSTER responder may not be deployed on the target cluster; submitting then returns HTTP 400 `responder_not_found`. Use `list_response_actions` with `context_event_id` (if non-empty) and `list_response_action_executions` (which `responderType`s have recently **completed** in this tenant) as hints. When unconfirmed, label the action's availability `unconfirmed` rather than `available`.
+   - **Storage dependency.** `GET_LOGS`, `CAPTURE`, and `FILE_ACQUIRE` write artifacts and require capture storage; without it they return HTTP 412 `storage_not_configured`. Before proposing them, call `get_capture_storage`: if it returns `isEnabled: false` or no bucket, mark these storage-dependent actions `unavailable` up front rather than discovering the 412 at submit.
    - **Parameter resolvability.** HOST + container-scoped actions (`KILL_CONTAINER`, `STOP_CONTAINER`, `PAUSE_CONTAINER`, container-scoped `FILE_ACQUIRE`) need a runtime `container.id`. If neither the event payload, the process tree, nor a context-matched kubectl can supply it, mark the action **un-parameterizable** and don't propose it as runnable.
    - **Fail-fast at execution.** The first submit of a given responder scope (or the first storage-dependent action) is the authoritative capability probe. On `responder_not_found`, mark **all** remaining same-scope candidates `unavailable`; on `storage_not_configured`, mark **all** storage-dependent candidates `unavailable` — then re-present the revised set instead of marching the user through actions that will fail identically. See Error handling.
 3. **Build the checklist.** For each candidate action, render the format from `consequence-analysis-guide.md`:
@@ -173,7 +173,7 @@ Goal: a single, ordered checklist of candidate actions, each with its full conse
    ```
    If an action's availability is `unconfirmed` or a precondition is unmet, say so in the line and order it accordingly — don't present a likely-to-fail action as the confident first move.
 4. **Order with explicit reasoning.** Lead the list with the action you'd recommend first; explain *why this order* in one or two sentences referencing what Step B found. Per the generic principle in `threat-patterns.md`: evidence first, containment second, destruction last. Prefer actions whose availability is **confirmed** over `unconfirmed` ones when they achieve the same containment.
-5. **Ask once.** Via `AskUserQuestion` with a free-form option: _"Pick which actions to run, in this order, or describe what you'd prefer in your own words."_ Accept structured selections or free-form descriptions; parse natural-language responses against the action list and confirm your interpretation back to the user before proceeding.
+5. **Ask once.** As a structured question with a free-form option: _"Pick which actions to run, in this order, or describe what you'd prefer in your own words."_ Accept structured selections or free-form descriptions; parse natural-language responses against the action list and confirm your interpretation back to the user before proceeding.
 
 ### Step D — Execute, one at a time, with strong announcement
 
@@ -183,7 +183,7 @@ For each accepted action **in the proposed order**:
 2. **Repeat the disclaimer when destructive.** If `reversibility = no`, include: _"This action is **not reversible** by the API. If you change your mind, recovery requires `<concrete manual step>`."_
 3. **Just-in-time authorization (if needed).** If the action requires a surface (`kubectl` mutating, `aws` mutating) and you only have read-only authorization for that surface, ask now: _"This action needs **write** access to `<surface>` (specifically: `<command shape>`). Authorize for this action? yes / no (file as ticket instead)."_
 4. **Execute.**
-   - Sysdig API: call `mcp__secure-mcp-server__submit_response_action` with `action_type` and `parameters`. Capture the execution `id` from the response, then poll `mcp__secure-mcp-server__get_response_action_status` with that `action_execution_id` until status is `COMPLETED` or `FAILED`. Surface the result inline.
+   - Sysdig API: call `submit_response_action` with `action_type` and `parameters`. Capture the execution `id` from the response, then poll `get_response_action_status` with that `action_execution_id` until status is `COMPLETED` or `FAILED`. Surface the result inline.
    - kubectl: run the exact command shown in step 1. Capture stdout/exit-code.
    - AWS CLI: run the exact command shown in step 1. Capture stdout/exit-code.
 5. **Decline → file-as-ticket fallback.** If the user declines this action, offer: _"File this as a Jira ticket / PagerDuty incident with the exact command and rationale, so a human can execute manually? yes / skip."_ Build the payload from the action's rendered block (Step C) plus the consequence analysis from Step B.
@@ -194,7 +194,7 @@ For each accepted action **in the proposed order**:
 Only if at least one action ran (status `executed`). Skip if everything was filed or skipped.
 
 1. Capture the workload selector (cluster + namespace + workload, or container id, or pod name — whichever survives the action).
-2. Poll `mcp__secure-mcp-server__list_runtime_events` at ~30 s intervals, up to 10 polls (~5 min), filtering for the **same rule that fired** on the **same workload**.
+2. Poll `list_runtime_events` at ~30 s intervals, up to 10 polls (~5 min), filtering for the **same rule that fired** on the **same workload**.
 3. Narrate progress: _"Watcher 1/10: 0 re-fires. ... 5/10: 0 re-fires."_ Once per minute is plenty; don't spam.
 4. Close as:
    - `cleared` — full window, no re-fires.
@@ -237,9 +237,9 @@ Apply the standard three-line error template (**what** / **why** / **fix**) for 
 > The container ID is gone — the kill succeeded.
 > Closing the watcher as `inconclusive` (success-with-caveat).
 
-> A `mcp__secure-mcp-server__*` call came back **denied** (the agent refused it, not a server error).
-> Prefix mismatch, not an auth/reachability failure — the Sysdig MCP server is registered under a different prefix than `secure-mcp-server`, so `allowed-tools` doesn't match.
-> Run `claude mcp list`, then re-register as `secure-mcp-server` or add the real `mcp__<name>__*` to permitted tools, and re-run. See the "denied / prefix mismatch" section in [`references/mcp-setup.md`](references/mcp-setup.md). Do not retry the denied call.
+> A Sysdig MCP call came back **denied** (the agent refused it, not a server error).
+> Permissions issue, not an auth/reachability failure — your agent's settings don't pre-approve that tool.
+> Approve the tool name shown in the denied call in your agent's permission settings (in Claude Code, `mcp__<actual-server-name>__*`), and re-run. See the "Tool calls come back denied" section in [`references/mcp-setup.md`](references/mcp-setup.md). Do not retry the denied call.
 
 ## Important rules
 
@@ -247,7 +247,7 @@ Apply the standard three-line error template (**what** / **why** / **fix**) for 
 - **Never execute a non-destructive action without confirmation either.** Read-only probing in Step B runs immediately, but anything in Step D — including data-gathering actions like FILE_ACQUIRE that consume tenant quota — needs a yes for that specific action.
 - **Never persist surface authorizations.** kubectl/AWS authorization is per-session, in-memory only. Next session asks again.
 - **Never act outside the threat's scope.** If the user asks to remediate something unrelated, refuse and point them at a fresh `/sysdig-runtime-remediate` invocation.
-- **Always cite undo when an action is reversible.** Give the exact undo call — `mcp__secure-mcp-server__undo_response_action` with `action_execution_id: <id>` — in the report and in the chat summary.
+- **Always cite undo when an action is reversible.** Give the exact undo call — `undo_response_action` with `action_execution_id: <id>` — in the report and in the chat summary.
 
 ## Handoff phrasing
 

@@ -12,12 +12,25 @@ identity-pinning rules stay in SKILL.md — they are load-bearing.
 The token is stored in `.sysdig-token` — a local file the user edits
 directly. The skill NEVER reads its contents; it only `source`s it.
 
+🔴 STRICT — never display `.sysdig-token`. Do not open it with a file-read
+tool and do not print any of its lines with `cat`, `head`, `tail`, `grep`,
+`sed`, `awk` or `diff` — every line of that output can carry the token, and
+anything a command prints enters the conversation. The only operations on it
+are:
+
+- **Does it exist and is it non-empty?** `test -s .sysdig-token` (exit code
+  0 = yes; prints nothing)
+- **Has the user replaced the placeholder?** `grep -c PASTE_YOUR_TOKEN_HERE .sysdig-token`
+  (prints only a count: `0` = replaced, `1` = still the placeholder)
+- **Use it:** `source .sysdig-token && <command>`
+- **Set the region URL:** `scripts/detect-region.sh --save-url` (step 5)
+
 1. If Step 0b detected `has_token`: generate `.sysdig-token` that bridges
    the detected variable (e.g., `export SYSDIG_SECURE_API_TOKEN="${SDC_SECURE_TOKEN}"`)
    instead of asking the user to paste a token. Tell the user:
    "I detected an existing Sysdig token in `$VAR` — using it."
 2. Check `echo "${SYSDIG_SECURE_API_TOKEN:+SET}"`. If set, skip to 5.
-3. If `.sysdig-token` doesn't exist, create it with the Write tool:
+3. If `.sysdig-token` doesn't exist, create it with your agent's file-write tool:
    ```bash
    # Sysdig Secure API Token — Find at: Sysdig > Settings > API Token
    # SECURITY: chmod 600, git-ignored. Do not commit or share.
@@ -29,16 +42,16 @@ directly. The skill NEVER reads its contents; it only `source`s it.
    Then `chmod 600 .sysdig-token` and ensure `.gitignore` includes it.
 4. Ask the user to paste their token in the file (NEVER in the chat).
    **Returning users:** If `.sysdig-token` already exists, skip to step 5.
-5. **Validate.** Run `source .sysdig-token && scripts/detect-region.sh`.
+5. **Validate and save the region URL.** Run
+   `source .sysdig-token && scripts/detect-region.sh --save-url`. On success
+   the script itself writes `export SYSDIG_BASE_URL="<detected URL>"` into
+   `.sysdig-token` (replacing that line, or appending it if missing) without
+   printing the file. Do NOT edit that line yourself — any edit needs the
+   file's content, which means reading the token.
    If the token is only in the environment (no `.sysdig-token`), run
    `scripts/detect-region.sh` directly — it reads `SYSDIG_SECURE_API_TOKEN`
    and auto-bridges legacy/MCP aliases (e.g. `SYSDIG_MCP_API_TOKEN`).
-6. If **valid**: set `SYSDIG_BASE_URL` in `.sysdig-token` using the **Edit
-   tool** — replace the `export SYSDIG_BASE_URL="..."` line with the detected
-   URL (append the line if missing). Use Edit, not `sed -i`: a wildcard
-   `sed` command is not auto-allowed (GNU `sed`'s `e` flag can execute a
-   shell), and Edit changes only the one line without reading the token
-   value. Show detected region, continue.
+6. If **valid**: show the detected region and continue.
 7. If **invalid**: ask user to verify. Max 2 retries.
 
 ### For Kubernetes / Linux Hosts (Agent Access Key)

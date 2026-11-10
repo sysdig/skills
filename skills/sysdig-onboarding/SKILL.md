@@ -88,6 +88,9 @@ allowed-tools:
   - Bash(command -v *)
   - Bash(ls *)
   - Bash(echo "${SYSDIG_SECURE_API_TOKEN:+SET}")
+  # .sysdig-token checks that never print its content — exit code / match count only
+  - Bash(test -s .sysdig-token)
+  - Bash(grep -c PASTE_YOUR_TOKEN_HERE .sysdig-token)
   # Linux host (Step 5) — read-only inspection only. The `draios-agent` package
   # registers the systemd unit `dragent`; Docker installs use the container
   # name `sysdig-agent`. Verification Checks 2-6 read the FILE sink
@@ -110,7 +113,7 @@ allowed-tools:
   - Bash(uname *)
   - Bash(cat /etc/os-release*)
   - Bash(dpkg --print-architecture*)
-version: 1.0.2
+version: 1.0.3
 ---
 
 ## First-run notice
@@ -118,7 +121,7 @@ version: 1.0.2
 Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 
-When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+This skill describes steps by capability, not by tool name: *ask a structured question*, *get explicit confirmation*, *write a file*, *run a command*. Follow [`references/agent-capabilities.md`](references/agent-capabilities.md) for how to do each one with your agent's tools, and what to do when a capability is missing — including when nobody can answer a question.
 
 ## On-brand output
 
@@ -140,15 +143,18 @@ or autonomous mode, then generate tailored installation configurations.
   needed, explain the reason — users trust what they understand.
 - **Progressive disclosure.** Ask one topic at a time, summarize what you
   know, then move forward.
-- **No noise between wizard steps.** Between consecutive AskUserQuestion
-  calls, emit NO text output unless communicating new information the wizard
+- **No noise between wizard steps.** Between consecutive structured
+  questions, emit NO text output unless communicating new information the wizard
   didn't capture (e.g., auto-detected account ID). The wizard panel itself
   shows selections — a status echo is redundant.
 - **Never pause mid-interview (CHAIN RULE).** The interview is a single
   continuous flow. Every response MUST contain a tool call — never end
-  with text only. After an AskUserQuestion answer, immediately call the
+  with text only. After a structured-question answer, immediately ask the
   next one. Text-only responses break the flow in turn-boundary
-  environments (e.g., desktop app). Legitimate pause points: (a) Step 2b
+  environments (e.g., desktop app). The one exception: when your agent has
+  no structured-question tool, the plain-text question itself ends the turn
+  (see `references/agent-capabilities.md`) — still ask the next question
+  immediately after each answer, with no status text in between. Legitimate pause points: (a) Step 2b
   credential setup (including the config-only bypass confirmation), (b) Step 3c
   preflight, (c) Step 5b final confirmation.
 - **Target-dependent flow.** Steps branch after Step 1:
@@ -207,7 +213,11 @@ or autonomous mode, then generate tailored installation configurations.
   variables or secret managers.
 - **CRITICAL — Never read, write, or handle tokens directly.**
   NEVER read files with secrets (`.sysdig-token`, `.secrets/env`,
-  `terraform.tfvars`). NEVER write real token values — use placeholders.
+  `terraform.tfvars`) — not with a file-read tool and not by printing lines
+  with `cat`, `grep`, `head`, `tail`, `sed` or `awk`, even "just to check a
+  line": the output enters the conversation. The only allowed operations on `.sysdig-token`
+  are listed in [references/credential-setup.md](references/credential-setup.md).
+  NEVER write real token values — use placeholders.
   NEVER ask the user to paste tokens in the chat. NEVER print token
   values (`echo $SYSDIG_SECURE_API_TOKEN`, `env`, `printenv`) — the only
   permitted check is `echo "${SYSDIG_SECURE_API_TOKEN:+SET}"`. ALWAYS use
@@ -218,13 +228,14 @@ or autonomous mode, then generate tailored installation configurations.
   user approval. Non-destructive commands (`terraform init`, `plan`,
   `validate`, validation scripts) run **proactively** without asking.
 - **No shell redirections.** Never use `2>&1`, `> file`, `2>/dev/null`, or
-  pipes (`|`) in Bash commands — they break `allowed-tools` matching.
-- **Use AskUserQuestion for choices.** Whenever presenting a bounded set of
-  options (2-4 choices), use the `AskUserQuestion` tool to render structured
-  TUI selectors instead of asking in plain text.
+  pipes (`|`) in the commands you run — permission rules (such as
+  `allowed-tools`) match the literal command line.
+- **Structured questions for choices.** Whenever presenting a bounded set of
+  options (2-4 choices), ask a structured question so your agent can render
+  a selector; fall back to a numbered plain-text list only when it can't.
 - **Small models for mechanical subagents.** The context-detection (2b-ii),
   permission-preflight (6a), and verification (Step 8) subagents only run
-  commands and summarize output. When your client's Agent tool supports
+  commands and summarize output. When your agent's subagent tool supports
   choosing a model, run them on a small/fast one (e.g. Haiku) — reserve the
   top-tier model for the conversation itself.
 
@@ -250,7 +261,8 @@ block. Credential validation happens in Step 2b after the target is known.
    - If `has_token` is true: note the detected variable for later use.
    - If `has_url` is true: note the detected URL for later use.
    - If nothing detected: note that credentials will need setup later.
-2. Check if `.sysdig-token` exists (do NOT read it).
+2. Check if `.sysdig-token` exists (do NOT read it): `test -s .sysdig-token`
+   (exit code only, prints nothing).
 3. **Do NOT validate, create files, or ask for tokens yet.** Proceed
    directly to Step 1 (target selection). The right credential type
    depends on the target:
@@ -275,7 +287,7 @@ instead of showing the full picker.
 
 ### Step 1: What do you want to onboard?
 
-Use AskUserQuestion — see
+Ask a structured question — see
 [references/interview-questions.md](references/interview-questions.md#step-1-target-mode)
 for the JSON spec. **Guided mode is the default** — do not ask the user to
 choose a mode. After the target selection, mention that autonomous mode is
@@ -309,7 +321,7 @@ invariants:
   goes into the generated config as a placeholder that **the user fills by
   editing the file directly** (`values.yaml` / `dragent.yaml`). Never ask for
   the key in chat, and never pass it via `helm --set` or a `! export` env var —
-  agent Bash calls run in fresh subshells that don't see the user's interactive
+  commands the agent runs execute in fresh subshells that don't see the user's interactive
   shell, so the value never reaches the install. See
   [references/generate-config.md](references/generate-config.md).
 
@@ -344,7 +356,7 @@ are separate steps, often done by different people or a pipeline. So:
 1. State plainly what you will and won't do — you will generate (and validate,
    if the tooling is present) the configuration, but you will NOT apply or
    deploy it; that is a separate step for an authenticated persona or pipeline.
-2. Confirm with AskUserQuestion (header `Prerequisites`) — three options,
+2. Confirm with a structured question (header `Prerequisites`) — three options,
    single-select. **Use these exact labels and descriptions, do NOT paraphrase
    or drop one:**
    - `Yes, proceed anyway` — "Generate the configuration now without the missing
@@ -352,7 +364,7 @@ are separate steps, often done by different people or a pipeline. So:
    - `No, I'll set up first` — "Exit so you can install the prerequisites, then
      re-run." (This is the safe default — prefer it when the user is unsure.)
    - `Stop here` — "Cancel onboarding."
-   Emit step 1's plain statement and this AskUserQuestion in the **same turn** —
+   Emit step 1's plain statement and this question in the **same turn** —
    never end a turn with only the statement (CHAIN RULE).
 3. On confirm, continue the interview. For any auto-detection that needed a
    missing tool (e.g. `kubectl` cluster context, `aws sts` identity), ask the
@@ -430,8 +442,8 @@ default AWS profile may point to a different account. After detection:
 #### 3a. Cloud provider
 
 If the user already specified the provider (e.g., "onboard my AWS account"),
-skip this question — do NOT re-ask what you already know. Only use
-AskUserQuestion when the provider is ambiguous. See
+skip this question — do NOT re-ask what you already know. Only ask a
+structured question when the provider is ambiguous. See
 [interview-questions.md](references/interview-questions.md#step-3a-cloud-provider).
 
 **Experimental provider handling.** Present the experimental-support disclaimer
@@ -448,7 +460,7 @@ present the disclaimer verbatim.
 
 #### 3b. Scope
 
-Use AskUserQuestion — see
+Ask a structured question — see
 [interview-questions.md](references/interview-questions.md#step-3b-scope).
 
 For **organizations**: ask about management account confirmation,
@@ -475,7 +487,7 @@ items. See [interview-questions.md](references/interview-questions.md#step-3c-pr
 #### 3d. Security capabilities
 
 See [interview-questions.md](references/interview-questions.md#step-3d-security-capabilities)
-for the AskUserQuestion spec and descriptions. For capability-to-feature
+for the structured-question spec and descriptions. For capability-to-feature
 mapping and template markers, see [references/features.md](references/features.md).
 
 **GCP branches here.** GCP's optional set is **Threat Detection**, **Advanced
@@ -541,6 +553,17 @@ This is **vulnerability scanning only**; serverless *runtime* detection is a
 separate product this skill does not generate (see the provider support tiers).
 Question spec:
 [interview-questions.md](references/interview-questions.md#step-3d-iv-serverless-workload-scanning).
+
+#### 3d-v. Validated Exposure (AWS, GCP, Azure)
+
+Always ask, for single and organization scope alike — including when the AWS
+gateway in 3d (a) declined optional capabilities. Validated Exposure is an option
+of the foundational Posture feature, not a separate capability, and it is off
+unless the user enables it. It resolves `{{VALIDATED_EXPOSURE_ENABLED}}` to
+`true` or `false` on the `config_posture` resource (the template already wraps
+the placeholder in quotes). See
+[interview-questions.md](references/interview-questions.md#step-3d-v-validated-exposure)
+and [features.md](references/features.md#validated-exposure-posture-flag).
 
 #### 3e. Terraform backend
 
@@ -639,7 +662,8 @@ The full per-target procedure is in
   separate folder (the "Set Up GCP APIs" step), or confirm the 6 required APIs
   are enabled. GCP has no `profile`/`allowed_account_ids` pin — confirm the
   project ID before apply. Generate from `templates/gcp_single_project.tf`: fill
-  `{{GCP_PROJECT_ID}}` / `{{GCP_REGION}}` / `{{AGENTLESS_SCANNING_FLAGS}}`, then
+  `{{GCP_PROJECT_ID}}` / `{{GCP_REGION}}` / `{{AGENTLESS_SCANNING_FLAGS}}` /
+  `{{VALIDATED_EXPOSURE_ENABLED}}`, then
   keep only the selected feature markers — `CDR` (Threat Detection),
   `CIEM Advanced` (Advanced Identity; also keep `CDR`), `VM` (Host Scanning),
   `WORKLOAD_SCANNING` (keep ≥1 `WORKLOAD_*` sub-marker) — and strip the rest.
@@ -648,7 +672,8 @@ The full per-target procedure is in
   [azure.md §1](references/azure.md)). Azure has no `profile`/`allowed_account_ids`
   pin — confirm the **Subscription ID + Tenant ID** before apply. Generate from
   `templates/azure_single_sub.tf`: fill `{{AZURE_SUBSCRIPTION_ID}}` /
-  `{{AZURE_TENANT_ID}}` / `{{SYSDIG_SECURE_URL}}`, and for selected features
+  `{{AZURE_TENANT_ID}}` / `{{SYSDIG_SECURE_URL}}` / `{{VALIDATED_EXPOSURE_ENABLED}}`,
+  and for selected features
   `{{AZURE_REGION}}` (CDR Event Hub), `{{AGENTLESS_SCANNING_FLAGS}}` (Container
   only — malware always `false`), and `{{AKS_ENABLED}}` / `{{FUNCTIONS_ENABLED}}`
   (workload toggles). Keep only the selected markers — `CDR` (Threat Detection),
@@ -672,7 +697,8 @@ left, feature markers balanced, no mutually-exclusive marker pairs) before
 
 ### Step 8: Post-Installation Verification
 
-**Always run verification checks via a subagent** (Agent tool) to keep the
+**Always run verification checks via a subagent** (if your agent has no
+subagents, run them inline and keep only the structured result) to keep the
 main conversation clean; the subagent handles retries and verbose output and
 returns a structured result. Per-target check sequences (cloud:
 `terraform state list` + `verify-cloud-status.sh` with backoff; Kubernetes:

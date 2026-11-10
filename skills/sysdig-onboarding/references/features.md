@@ -62,6 +62,23 @@ Detects misconfigurations, reports violations, and provides remediation guidance
 **What it creates:** A read-only IAM role/service principal that inventories
 cloud resources. No data leaves the cloud account — Sysdig reads metadata only.
 
+#### Validated Exposure (posture flag)
+
+AWS, GCP and Azure. Set as a flag on the `FEATURE_SECURE_CONFIG_POSTURE`
+resource, not as a module variable:
+
+| Flag | Capability | Values |
+|------|-----------|--------|
+| `POSTURE_VALIDATED_EXPOSURE_ENABLED` | Validated Exposure — Sysdig actively probes internet-facing endpoints from its scanner IPs to confirm which exposures are reachable | `"true"` / `"false"` (strings) |
+
+Resolve `{{VALIDATED_EXPOSURE_ENABLED}}` from Step 3d-v. The resource keeps
+`lifecycle { ignore_changes = [flags] }`, so Terraform sets the flag only when it
+creates the feature; a change made later in Sysdig is not reverted by the next
+`terraform apply`. On an organization the flag is set on the management account
+and applies to every member account. Requires the `sysdiglabs/sysdig` provider
+3.11.2 or later, so that account updates keep feature flags. Not offered for IBM
+Cloud or OCI.
+
 ---
 
 ### CDR — Cloud Detection and Response

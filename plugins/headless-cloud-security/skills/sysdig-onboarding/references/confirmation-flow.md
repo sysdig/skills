@@ -4,7 +4,7 @@ After the discovery interview and before generating configuration, present
 a confirmation summary for user review.
 
 **The table is script-rendered.** Write the collected settings to
-`.sysdig-recap.tsv` with the Write tool — first line `target: cloud`,
+`.sysdig-recap.tsv` with your agent's file-write tool — first line `target: cloud`,
 `target: kubernetes`, or `target: host`, then one
 `Setting<TAB>Value<TAB>Source` row per line — and run
 `scripts/render-recap.sh .sysdig-recap.tsv`. Show its output **verbatim**.
@@ -75,12 +75,12 @@ still has to be supplied at apply time.
 | Scope | Single Account | Step 3b |
 | Sysdig Region | us1 | Step 2 |
 | Capabilities | Foundational + Threat Detection + Advanced Identity + Host Scanning | Step 3d |
+| Validated Exposure | Enabled | Step 3d-v |
 | Log capture mode | EventBridge | Step 3d-ii |
 | Cloud Logs regions | us-east-1, eu-west-1 | Step 3d-ii |
 | Host Scanning extras | Container scanning | Step 3d-iii |
 | Host Scanning regions | us-east-1, us-west-2 | Step 3d-iii |
 | Workload Scanning | ECS + Lambda | Step 3d-iv |
-| Serverless scanning | Lambda, ECS | Step 3d-iv |
 | Backend | Local | Step 3e |
 
 `AWS Profile` and `Caller` are load-bearing for the account-identity-pinning
@@ -89,14 +89,16 @@ and profile will be onboarded.
 
 **Omission rules** (the only authorized deviations from the schema):
 - Omit `AWS Profile` + `Caller` when the provider is GCP or Azure.
+- `Validated Exposure` reads `Enabled` or `Disabled` for AWS, GCP and Azure.
 - Omit `Log capture mode` + `Cloud Logs regions` when neither Threat Detection
   nor Advanced Identity Analysis is selected.
 - Omit `Host Scanning extras` + `Host Scanning regions` when Host Scanning is
   not selected.
-- Omit `Workload Scanning` when Workload Scanning is not selected; show `ECS`
-  (ECS only) or `ECS + Lambda` (Step 3d-iv) when it is.
-- Omit `Serverless scanning` when serverless scanning is not selected. Example
-  values: `Lambda, ECS` for AWS, `Cloud Run` for GCP.
+- Omit `Workload Scanning` when Workload Scanning is not selected. When it is,
+  the value lists the serverless targets chosen in Step 3d-iv: `ECS`,
+  `ECS + Lambda` or `Lambda` for AWS. For GCP and Azure it lists every
+  selected workload type (e.g. `Cloud Run, GKE, Cloud Functions`) — see the
+  provider notes below.
 - **GCP:** the `Account ID` row holds the **Project ID**; `Capabilities` reads
   `Foundational` plus any of `Threat Detection` / `Advanced Identity` /
   `Host Scanning` / `Workload Scanning`. Omit `Log capture mode` +
@@ -173,7 +175,7 @@ the chance to correct it before install.
 structure below are verbatim. Do not flatten the two steps into one menu and do
 not drop `Start over`.
 
-Use AskUserQuestion:
+Ask a structured question:
 
 ```json
 {
@@ -204,6 +206,7 @@ Show only options relevant to the current target type:
     {"label": "Scope"},
     {"label": "Region"},
     {"label": "Capabilities"},
+    {"label": "Validated Exposure"},
     {"label": "Log capture mode"},
     {"label": "Per-feature regions"},
     {"label": "Backend"}
@@ -262,6 +265,12 @@ dialog, then re-resolve any dependent sub-steps (log capture, host scanning
 extras, per-feature regions, Lambda/Workload scanning) that
 the new selection adds or removes.
 
+For **Validated Exposure**, re-ask Step 3d-v and update `{{VALIDATED_EXPOSURE_ENABLED}}`
+and the `Validated Exposure` row. Editing **Capabilities** does not change it. Editing
+**Scope** does: re-ask Step 3d-v with the picker for the new scope (single or
+organization), because the organization question tells the user the setting
+reaches every member account.
+
 ## Don'ts
 
 Each rule blocks a specific observed drift:
@@ -282,6 +291,7 @@ Before proceeding to generation, verify completeness:
 | Threat Detection selected but no Cloud Logs regions chosen | Ask the Cloud Logs region question (resolves `EVENT_BRIDGE_REGIONS` in EventBridge mode or `CLOUD_LOGS_REGIONS` in CloudTrail/S3 mode) |
 | Advanced Identity Analysis selected but Threat Detection not | Enable the CDR (Cloud Logs) block anyway — it supplies the data — and tell the user Cloud Logs is being enabled for it |
 | Host Scanning selected but no Host Scanning regions chosen | Ask the Host Scanning region question (resolves `AGENTLESS_SCANNING_REGIONS`) |
+| Cloud account (AWS, GCP or Azure) and `VALIDATED_EXPOSURE_ENABLED` unresolved | Ask Step 3d-v and resolve to the bare word `true` or `false` (the template already quotes the placeholder) — never leave the placeholder or drop the key |
 | Host Scanning selected but `AGENTLESS_SCANNING_FLAGS` unresolved | Resolve to the chosen flags map or `{}` (host disks only) — never leave the placeholder |
 | Org scope from member account | Warn: "You appear to be on a member account. Org-scope requires management account credentials." |
 | Backend mismatches provider | Warn: "S3 backend with Azure provider — is this intentional?" |

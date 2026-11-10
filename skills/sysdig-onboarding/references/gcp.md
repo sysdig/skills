@@ -167,9 +167,10 @@ project is resolved once, from the onboarding module.
 | `vm-workload-scanning` | Workload Scanning | `project_id`, `sysdig_secure_account_id`, `is_organizational`, `organization_domain` | `vm_workload_scanning_component_id` |
 
 Each capability is registered with a `sysdig_secure_cloud_auth_account_feature`
-resource that references the module's component ID. Basic Identity and
-agentless-scanning use `lifecycle { ignore_changes = [flags] }` so later UI
-toggles are not reverted by Terraform. **Advanced Identity has no module of its
+resource that references the module's component ID. Posture (Validated
+Exposure flag), Basic Identity and agentless-scanning use
+`lifecycle { ignore_changes = [flags] }` so later UI toggles are not reverted by
+Terraform. **Advanced Identity has no module of its
 own** — it reuses the config-posture and pub-sub components (`concat`) with
 `CIEM_FEATURE_MODE = "advanced"`, so the CDR (pub-sub) block must be present
 whenever it is enabled.

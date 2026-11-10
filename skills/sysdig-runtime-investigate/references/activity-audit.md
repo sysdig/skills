@@ -14,14 +14,9 @@ resolved the threat.
 
 ## Tools
 
-Exposed by the Sysdig MCP server. SKILL.md's `allowed-tools` lists them under the
-canonical prefix `mcp__secure-mcp-server__` — the registration name mandated by
-`references/mcp-setup.md` (`claude mcp add … secure-mcp-server …`). The table below
-uses the **bare** names for brevity; prepend the prefix the server is actually
-registered under in your agent. If it was registered under a different name (e.g. a
-plugin-managed prefix), the bare names still match 1:1 — only the prefix changes, and
-`allowed-tools` must be reconciled with it or the calls come back **denied** (see the
-"MCP tool call denied" row in SKILL.md's Error Handling):
+Exposed by the Sysdig MCP server. The table below uses the **bare** tool names; match
+them by suffix against whatever prefix your agent gives the Sysdig server (see
+[How Sysdig tools are named](auth-preflight.md#how-sysdig-tools-are-named)):
 
 | Tool | Use |
 |------|-----|

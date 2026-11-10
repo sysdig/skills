@@ -434,7 +434,7 @@ provide `api_url` and `collector.host`/`collector.port` explicitly.
 > - ask the user to `! export SYSDIG_AGENT_ACCESS_KEY=...` and reference `$SYSDIG_AGENT_ACCESS_KEY`.
 >
 > The `! export` / `--set` route **does not work**: `!`-prefixed commands run
-> in the user's interactive shell, but each agent Bash tool call runs in a
+> in the user's interactive shell, but each command the agent runs executes in a
 > fresh, separate subshell that does **not** inherit that environment — so the
 > variable is empty by the time Helm reads it. Editing the placeholder in the
 > file is the only reliable path.

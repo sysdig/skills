@@ -115,9 +115,9 @@ ISOLATE_NETWORK on this pod will:
 If the user has **not** authorized `kubectl` or AWS CLI access yet, Step B
 runs whatever it can via Sysdig MCP only:
 
-- `mcp__secure-mcp-server__run_sysql` for workload/RBAC/Service mappings.
-- `mcp__secure-mcp-server__get_event_process_tree` for the process chain.
-- `mcp__secure-mcp-server__list_runtime_events` for recent activity on the
+- `run_sysql` for workload/RBAC/Service mappings.
+- `get_event_process_tree` for the process chain.
+- `list_runtime_events` for recent activity on the
   same workload (last 7 days).
 
 If MCP-only probing leaves dependency gaps, **say so** and offer the user

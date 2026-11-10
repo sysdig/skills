@@ -17,14 +17,14 @@ allowed-tools:
   - mcp__secure-mcp-server__generate_sysql
   - mcp__secure-mcp-server__get_sysql_entity
   - mcp__secure-mcp-server__list_sysql_entities
-version: 1.0.2
+version: 1.0.3
 ---
 
 ## First-run notice
 
 Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
-When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+This skill describes steps by capability, not by tool name: *ask a structured question*, *get explicit confirmation*, *write a file*, *run a command*. Follow [`references/agent-capabilities.md`](references/agent-capabilities.md) for how to do each one with your agent's tools, and what to do when a capability is missing — including when nobody can answer a question.
 
 ## On-brand output
 
@@ -73,7 +73,8 @@ This draft is **scratch — do not print it.** Never guess field or relationship
 Apply these **filter conventions as you write**:
 - **Names / free-text** (workload, image, package, control, CVE, username): use a case-insensitive regex match, e.g. `c.name =~ '(?i).*nginx.*'`, not `=`.
 - **Resource types**: substring/case-insensitive match, e.g. `r.type =~ '(?i).*s3.*'`.
-- **Traversal & branching — keep it minimal and adherent to the question**: traverse only the entities the question is about, via the **most direct relationship** between them. The live schema usually exposes a direct (often virtual) edge — use `EC2Instance HAS_ACCESS S3Bucket`, **don't** hand-expand it through `IAMInstanceProfile → IAMRole → …` that the question never mentioned, just to keep one `MATCH`. A single linear `MATCH` is fine for a **direct** chain; to branch from the same node, or to avoid routing through irrelevant entities, use **multiple `MATCH`** clauses that repeat the shared alias, each with an explicit relationship (`MATCH k AFFECTED_BY Vulnerability AS v` / `MATCH k GENERATES RuntimeEvent AS e`). **No** comma multi-path (`MATCH a REL b, a REL c`) and **no** Cypher-style `WITH <var>`.
+- **Traversal & branching — keep it minimal and adherent to the question**: traverse only the entities the question is about, via the **most direct relationship** between them. The live schema usually exposes a direct (often virtual) edge — use `EC2Instance HAS_ACCESS S3Bucket`, **don't** hand-expand it through `IAMInstanceProfile → IAMRole → …` that the question never mentioned, just to keep one `MATCH`. A single linear `MATCH` is fine for a **direct** chain; to branch from the same node, or to avoid routing through irrelevant entities, use **multiple `MATCH`** clauses that repeat the shared alias, each with an explicit relationship (`MATCH k AFFECTED_BY Vulnerability AS v` / `MATCH k GENERATES RuntimeEvent AS e`). **No** comma multi-path (`MATCH a REL b, a REL c`) and **no** Cypher-style `WITH <var>` — SysQL's only `WITH` is the subquery stage `WITH … FROM (…)` below.
+- **Sorting / top-N on numerous entities** (`Vulnerability`, `Package`, `Container`, `Image`, `RuntimeEvent`, `CloudResource`): never `ORDER BY … LIMIT` a big join in the main part — it sorts the whole join first. Sort and limit the entity you rank by inside a `WITH … FROM (…)` stage, with its own filters, then traverse from the survivors: `WITH v FROM (MATCH Vulnerability AS v WHERE v.severity = 'Critical' ORDER BY v.cvssScore DESC LIMIT 50) MATCH KubeWorkload AS k AFFECTED_BY v RETURN …`. A stage `LIMIT` counts entities ("top 20 workloads *with* their vulns"), the outer `LIMIT` counts rows. The main part must still start with `MATCH`; an aggregate alias projected by the stage must appear in `RETURN`/`WHERE` to be sortable; the stage's `ORDER BY` can't use an aggregate alias. Rules and examples: [`references/sysql_reference.md`](references/sysql_reference.md#with--from--subquery-stages).
 - **Negation**: `field =~ '^(?!value).*'` (SysQL has no `!~`).
 - **IPs in RETURN**: guard with `WHERE entity.publicIPs != NULL` (or `privateIPs`).
 - **Enumerations / regions**: normalise from your own knowledge — severities are `Critical`, `High`, `Medium`, `Low`, `Info`; regions are canonical cloud regions (`us1`/`virginia` → `us-east-1`, `oregon` → `us-west-2`, `frankfurt` → `eu-central-1`, …). Use single quotes for string literals.
@@ -95,7 +96,7 @@ The query is final only once every field and relationship is confirmed against t
 
 Run as many queries as the analysis needs — discovery, the main query, **diagnostics when results are empty** ("are there any exposed EC2s at all?"), drill-downs — and show **each** one in its own block before its call.
 
-- **`422` parse error** (rare, since step 2 validated it) → fix it and show **only** the corrected, valid query for the re-run; don't leave an invalid query standing. Common cause: SysQL is not Cypher, so `WITH <var>` carried into a following `MATCH` is invalid — use repeated `MATCH` with a shared alias (see [`references/sysql_reference.md`](references/sysql_reference.md)). After **2** failed fixes, fall back to `generate_sysql`.
+- **`422` parse error** (rare, since step 2 validated it) → fix it and show **only** the corrected, valid query for the re-run; don't leave an invalid query standing. Common causes: SysQL is not Cypher, so `WITH <var>` carried into a following `MATCH` is invalid — use repeated `MATCH` with a shared alias; a `WITH … FROM (…)` stage followed by `RETURN` with no `MATCH`, `DISTINCT`/aggregates without an alias in the stage list, or a stage `ORDER BY` on an aggregate alias (see [`references/sysql_reference.md`](references/sysql_reference.md)). After **2** failed fixes, fall back to `generate_sysql`.
 - **0 rows** is **not** an error.
 
 > Every query you display is **valid and validated**. **Never run a query the user hasn't just seen**, and **never state a finding** (a count, "there are 18…", "0 overlap") **without the query shown right above it.** This holds for the first question and every follow-up.
@@ -156,7 +157,7 @@ LIMIT 50;
 
 > User: "Which workloads violate the S3 control?"
 
-The control filter is a case-insensitive substring match, so no lookup is needed. Only if several **real** controls plausibly match the intent do you ask via `AskUserQuestion` before running.
+The control filter is a case-insensitive substring match, so no lookup is needed. Only if several **real** controls plausibly match the intent do you ask a structured question before running.
 
 ### More examples
 
@@ -170,6 +171,16 @@ RETURN k.name, k.clusterName, v.name, v.cvssScore;
 MATCH KubeWorkload AS k AFFECTED_BY Vulnerability AS v WHERE v.severity = 'Critical'
 MATCH k GENERATES RuntimeEvent AS e
 RETURN DISTINCT k.name, k.namespaceName;
+
+# Top-N on a numerous entity: sort + limit in a WITH stage, then join (not ORDER BY on the whole join)
+WITH v FROM (MATCH Vulnerability AS v WHERE v.severity = 'Critical' AND v.hasExploit = true ORDER BY v.cvssScore DESC LIMIT 50)
+MATCH KubeWorkload AS k AFFECTED_BY v
+RETURN v.name, v.cvssScore, k.name, k.namespaceName ORDER BY v.cvssScore DESC;
+
+# Rank by count with extra data joined after aggregating; WHERE on the alias acts as HAVING
+WITH k, count(v) AS c FROM (MATCH KubeWorkload AS k AFFECTED_BY Vulnerability AS v WHERE v.severity = 'Critical')
+MATCH k IN Zone AS z WHERE c > 10
+RETURN k.name, z.name, c ORDER BY c DESC LIMIT 20;
 ```
 
 ## Error handling
@@ -177,13 +188,13 @@ RETURN DISTINCT k.name, k.namespaceName;
 Report problems with the **What happened → Why → What to do next** pattern.
 
 - **`run_sysql`/`generate_sysql` tools missing.** The MCP server isn't reachable → follow the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md); report only the specific failing step.
-- **A tool call comes back _denied_.** The agent refuses a `mcp__secure-mcp-server__*` call rather than the server erroring — a **prefix mismatch**, not unreachability: the server is registered under a different prefix → apply the "denied / prefix mismatch" fix in [`references/mcp-setup.md`](references/mcp-setup.md); don't retry the denied call.
+- **A tool call comes back _denied_.** The agent refuses a Sysdig MCP call rather than the server erroring — a permissions issue, not unreachability: the agent's settings don't pre-approve that tool → apply the "Tool calls come back denied" fix in [`references/mcp-setup.md`](references/mcp-setup.md); don't retry the denied call.
 - **Schema validation unavailable.** A schema tool (`list_sysql_entities` / `get_sysql_entity`) errors or the server is unreachable → draft from your own knowledge and let the `run_sysql` execution surface a `422` parse error, then fix from that message.
 - **Execution error / `422`.** Handled by step 3 (read the parse error → fix → re-validate → re-run, max 2, then `generate_sysql`). Surface to the user only if the fallback also fails — don't pretend it succeeded.
 - **Empty result set.** The query is valid but returned zero rows.
   - *Why (likely):* a filter value that doesn't exist in this tenant, a too-strict filter, or data outside your scope.
   - *Fix:* list the real values with a `RETURN DISTINCT Entity.field` query, loosen the filter, or check the zone/account scope. Offer to re-run with the change.
-- **Result hit `LIMIT`.** Communicate the likely truncation; offer to raise `LIMIT` (max 1000), paginate with `OFFSET`, or add filters.
+- **Result hit `LIMIT`.** Communicate the likely truncation; offer to raise `LIMIT` (max 1000), paginate with `OFFSET`, or add filters. If the query sorts a join over a numerous entity, offer to move the sort and `LIMIT` into a `WITH … FROM (…)` stage instead of raising `LIMIT`.
 
 ## Scope
 
@@ -197,5 +208,5 @@ We talk about **risks** for misconfigurations or risky conditions (e.g. exposed 
 
 - [`references/sysql_reference.md`](references/sysql_reference.md) — complete language reference (syntax). Entities, fields and relationships come from the live MCP schema tools (`list_sysql_entities` / `get_sysql_entity`), not from a static file.
 - [`references/cspm_questions.md`](references/cspm_questions.md) — catalog of supported CSPM questions and scope.
-- [`references/mcp-setup.md`](references/mcp-setup.md) — register the `secure-mcp-server` and the diagnostic checklist.
+- [`references/mcp-setup.md`](references/mcp-setup.md) — register the Sysdig MCP server and the diagnostic checklist.
 - [`references/auth-preflight.md`](references/auth-preflight.md) — pre-flight to run before any MCP call.

@@ -48,7 +48,7 @@ For most tenants a single page is enough; the loop is a safety net for tenants w
 
 ### 2b. Mini-checkpoint — new policy or extend existing?
 
-Use `AskUserQuestion` immediately after presenting the landscape.
+Ask it as a structured question immediately after presenting the landscape.
 
 **If no custom policies exist:** skip the question; inform the user there are no custom policies yet and proceed to create one.
 

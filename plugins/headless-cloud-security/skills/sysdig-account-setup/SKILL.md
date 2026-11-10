@@ -36,7 +36,7 @@ allowed-tools:
   - mcp__secure-mcp-server__set_zone_posture_policies
   - mcp__secure-mcp-server__list_runtime_policies
   - mcp__secure-mcp-server__update_runtime_policy
-version: 1.0.1
+version: 1.0.2
 ---
 
 ## First-run notice
@@ -44,7 +44,7 @@ version: 1.0.1
 Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 
-When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+This skill describes steps by capability, not by tool name: *ask a structured question*, *get explicit confirmation*, *write a file*, *run a command*. Follow [`references/agent-capabilities.md`](references/agent-capabilities.md) for how to do each one with your agent's tools, and what to do when a capability is missing — including when nobody can answer a question.
 
 ## On-brand output
 

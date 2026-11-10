@@ -34,7 +34,7 @@ hosts: []                     # Linux hosts onboarded
   guess values.
 - Keep the file minimal: no comments beyond the schema above, no session
   history (that goes in `customer-log.md`).
-- **If file writes are denied** (Write/Edit tool blocked by permissions),
+- **If file writes are denied** (the agent's file-write tool is blocked by permissions),
   present the full content to the user in a code block and say: "I couldn't
   write this file automatically. Please save the content above to
   `<filename>`." This ensures no session data is lost even in restricted

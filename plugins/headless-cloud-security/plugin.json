@@ -1,0 +1,29 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "headless-cloud-security",
+  "description": "Sysdig's cloud security expertise, packaged as agent skills that work natively in your AI environment.",
+  "author": {
+    "name": "Sysdig",
+    "url": "https://github.com/sysdig/skills"
+  },
+  "homepage": "https://github.com/sysdig/skills",
+  "repository": "https://github.com/sysdig/skills",
+  "keywords": [
+    "sysdig",
+    "sysdig secure",
+    "sysql",
+    "security",
+    "cloud security",
+    "cspm",
+    "posture",
+    "vulnerabilities",
+    "vulnerability management",
+    "runtime security",
+    "threats",
+    "kubernetes",
+    "aws",
+    "gcp",
+    "azure"
+  ],
+  "version": "0.4.2"
+}

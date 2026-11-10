@@ -6,7 +6,7 @@ No API writes. All creation happens via `terraform apply` on user approval.
 
 ## Inputs to gather up front
 
-Use `AskUserQuestion` where the option set is bounded; otherwise confirm freeform answers in a single summary before generation.
+Ask a structured question where the option set is bounded; otherwise confirm freeform answers in a single summary before generation.
 
 | Field | Example | Notes |
 |---|---|---|
@@ -60,7 +60,7 @@ Beyond the parent / child disambiguation fetches noted above, do not fetch sampl
 
 ### 3. Confirm fields in one round
 
-Present the candidates and unset fields as a single summary, marking each as `(extracted)` or `(needs input)`. Use `AskUserQuestion` for bounded sets — severity (`Low` / `Medium` / `High`) and the resource-kind shortlist if more than one candidate survived step 2 — and freeform for the rest.
+Present the candidates and unset fields as a single summary, marking each as `(extracted)` or `(needs input)`. Use structured questions for bounded sets — severity (`Low` / `Medium` / `High`) and the resource-kind shortlist if more than one candidate survived step 2 — and freeform for the rest.
 
 The user either confirms the summary, edits values inline, or rejects. Re-ask only the fields that changed. Generation must not begin until every field has a confirmed value.
 

@@ -31,7 +31,7 @@ Once installed, describe what you need in plain language. Examples:
 ### Prerequisites
 
 - A **Sysdig Secure** account
-- A supported AI coding agent — **Claude Code** is the primary target; **Cursor**, **OpenAI Codex**, and **OpenCode** can use the bare skills via [Compatibility with other agents](#compatibility-with-other-agents)
+- A supported AI coding agent — **Claude Code** is the primary target; **Amazon Kiro** installs the plugin as a power (see [Install in Kiro](#install-in-kiro)); **Cursor**, **OpenAI Codex**, and **OpenCode** can use the bare skills via [Compatibility with other agents](#compatibility-with-other-agents)
 - **Python 3** — required by skill scripts (uses stdlib only, no `pip install` needed)
 - A **Sysdig API token** — *only* if you use `sysdig-onboarding` or `sysdig-posture`. Generate one under **Settings → Sysdig Secure API**. Every other skill authenticates via OAuth and needs no token.
 
@@ -84,6 +84,31 @@ export SYSDIG_SECURE_API_TOKEN="your-api-token"
 ```
 
 Skills auto-discover these. **Never paste credentials in chat.** The hosted MCP server ignores these variables.
+
+### Install in Kiro
+
+[Amazon Kiro](https://kiro.dev) installs the plugin as a **power** (Agent Plugins format — the `plugin.json` at the plugin root). In the Kiro IDE, open the Powers panel → **Add Custom Power** → **Import power from GitHub**, and point it at the `plugins/headless-cloud-security` folder of this repository. Or, from a local clone, with the Kiro CLI:
+
+```bash
+git clone https://github.com/sysdig/skills.git ~/sysdig-skills
+kiro-cli powers install ~/sysdig-skills/plugins/headless-cloud-security
+```
+
+In the Kiro CLI, powers are available with the v3 agent engine (`kiro-cli chat --v3`).
+
+The power ships the skills only — like the Claude Code plugin, it does **not** bundle the Sysdig MCP server, because its URL depends on your region. Register it once at user level in `~/.kiro/settings/mcp.json`, using your region URL from the [table above](#register-the-sysdig-mcp-server):
+
+```json
+{
+  "mcpServers": {
+    "secure-mcp-server": {
+      "url": "https://us2.app.sysdig.com/mcp/secure"
+    }
+  }
+}
+```
+
+Kiro runs the OAuth sign-in in your browser the first time a skill needs the server (interactive session). Per-skill dependencies on other MCP servers (Jira, GitHub), declared in `agents/*.yaml`, are not loaded by the power; add them to the same `mcp.json` if you use them.
 
 ### Compatibility with other agents
 
@@ -142,8 +167,9 @@ skills/
 ├── .claude-plugin/
 │   └── marketplace.json                  # marketplace index (generated)
 ├── plugins/
-│   └── headless-cloud-security/          # the published Claude Code plugin
-│       ├── .claude-plugin/plugin.json
+│   └── headless-cloud-security/          # the published plugin (Claude Code plugin + Kiro power)
+│       ├── .claude-plugin/plugin.json    # Claude Code manifest
+│       ├── plugin.json                   # Agent Plugins manifest (Kiro power)
 │       └── skills/<skill-name>/          # one directory per skill
 └── skills/
     └── <skill-name>/                     # bare-skill mirror (spec-compliant)

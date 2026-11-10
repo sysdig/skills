@@ -22,7 +22,7 @@ allowed-tools:
   - Bash(echo "${SYSDIG_SECURE_API_TOKEN:+SET}")
   - Bash(mkdir -p *)
   - Bash(ls *)
-version: 1.0.1
+version: 1.0.2
 ---
 
 ## First-run notice
@@ -30,7 +30,7 @@ version: 1.0.1
 Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 
-When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+This skill describes steps by capability, not by tool name: *ask a structured question*, *get explicit confirmation*, *write a file*, *run a command*. Follow [`references/agent-capabilities.md`](references/agent-capabilities.md) for how to do each one with your agent's tools, and what to do when a capability is missing — including when nobody can answer a question.
 
 ## On-brand output
 
@@ -46,7 +46,7 @@ Help users author Posture custom controls and custom policies for Sysdig Secure,
 - **Credential auto-discovery.** Detect the Sysdig token and URL from environment variables. Never hardcode them, and never ask the user to paste secrets in chat. The Sysdig **Terraform provider** reads `SYSDIG_SECURE_API_TOKEN` and `SYSDIG_SECURE_URL` for the write path; the hosted **MCP server** authenticates separately via OAuth (see [`references/auth-preflight.md`](references/auth-preflight.md)) and does not read those env vars.
 - **File-first Rego loop.** Rego lives in a real file next to the `.tf`. Read the file and pass its content to the `test_posture_rego` MCP tool to validate. Show diffs and test results in chat, not the full Rego each turn.
 - **Human approves destructive ops.** `terraform apply` and `terraform destroy` require explicit user confirmation. `init`, `plan`, `validate`, and read-only MCP tool calls run proactively.
-- **No shell redirections in Bash.** Never use `>`, `>>`, `|`, or `2>&1` in Bash tool calls — they break `allowed-tools` matching.
+- **No shell redirections in commands.** Never use `>`, `>>`, `|`, or `2>&1` in the commands you run — permission rules (such as `allowed-tools`) match the literal command line.
 
 ## Step 0: Trust Preamble
 
@@ -58,7 +58,7 @@ Help users author Posture custom controls and custom policies for Sysdig Secure,
 
 Before any other step, run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. If it tells you to abort, abort — do not call any MCP tools or perform other side effects.
 
-If a tool call later fails during normal operation, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md) to identify the specific failure. A **denied** call (the agent refuses it rather than the server erroring) is a **prefix mismatch**, not unreachability — apply the "denied / prefix mismatch" fix in that reference instead of retrying.
+If a tool call later fails during normal operation, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md) to identify the specific failure. A **denied** Sysdig MCP call (the agent refuses it rather than the server erroring) is a permissions issue, not unreachability — apply the "Tool calls come back denied" fix in that reference instead of retrying.
 
 Do not proceed until the MCP server is reachable. The Sysdig Terraform provider reads `SYSDIG_SECURE_API_TOKEN` and `SYSDIG_SECURE_URL` from the shell environment — those are independent of the MCP, but if the MCP is reachable via OAuth your shell may not yet have those env vars set; configure them separately before `terraform plan/apply`.
 
@@ -96,7 +96,7 @@ echo "${SYSDIG_SECURE_API_TOKEN:+SET}"
 
 ## Routing
 
-After prerequisites are OK, ask the user what they want to do. Use `AskUserQuestion` with these options:
+After prerequisites are OK, ask the user what they want to do. Ask a structured question with these options:
 
 1. **Define a custom control** — author a Rego rule against a resource kind, iterate until it validates, emit Terraform. See [references/workflow-control.md](references/workflow-control.md).
 2. **Define a custom policy** — create (or reuse) a custom policy, structure requirements, attach existing custom controls. See [references/workflow-policy.md](references/workflow-policy.md).

@@ -22,6 +22,8 @@ log_sources: all           # optional, EventBridge only. "all" (default) =
                            # [cloudtrail_management, console_signin, guardduty];
                            # build event_pattern per that file's algorithm.
 host_scanning_extras: [container, malware]  # optional; malware is Preview
+validated_exposure: false  # optional; true | false (default). Resolves
+                           # {{VALIDATED_EXPOSURE_ENABLED}} on config_posture.
 backend: local             # local | s3 | gcs | azurerm
 ```
 

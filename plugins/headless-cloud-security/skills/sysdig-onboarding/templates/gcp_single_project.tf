@@ -24,7 +24,7 @@ terraform {
   required_providers {
     sysdig = {
       source  = "sysdiglabs/sysdig"
-      version = "~> 3.3"
+      version = ">= 3.11.2, < 4.0.0"
     }
     google = {
       source  = "hashicorp/google"
@@ -72,6 +72,16 @@ resource "sysdig_secure_cloud_auth_account_feature" "config_posture" {
   enabled    = true
   components = [module.config-posture.service_principal_component_id]
   depends_on = [module.config-posture]
+
+  # Validated Exposure: Terraform sets it on create only; later changes
+  # made in Sysdig are kept, not reverted by the next apply.
+  flags = {
+    "POSTURE_VALIDATED_EXPOSURE_ENABLED" : "{{VALIDATED_EXPOSURE_ENABLED}}"
+  }
+
+  lifecycle {
+    ignore_changes = [flags]
+  }
 }
 
 # === END CSPM ===

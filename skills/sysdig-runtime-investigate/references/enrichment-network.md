@@ -34,11 +34,11 @@ Also extract any DNS-like field if present (`dns.qname`, `dns.qtype`).
 
    Capture: `country`, `region`, `city`, `org` (ASN owner). Cache per-IP in working memory for the run.
 
-2. **Sysdig threat intelligence cross-check.** Call `mcp__secure-mcp-server__fetch_threat_intelligence_feed` once per investigation. The feed returns Sysdig-curated CVEs / zero-days / active-attack notes. Cross-reference each remote IP's ASN owner against entries that mention IP/ASN-based indicators, and each DNS query name against entries that mention domains.
+2. **Sysdig threat intelligence cross-check.** Call `fetch_threat_intelligence_feed` once per investigation. The feed returns Sysdig-curated CVEs / zero-days / active-attack notes. Cross-reference each remote IP's ASN owner against entries that mention IP/ASN-based indicators, and each DNS query name against entries that mention domains.
 
    Record matches as `ti_matches: [{indicator: "1.2.3.4", source: "Sysdig TI feed", note: "<headline>"}]`.
 
-3. **Lateral candidates via prior events.** Look for other recent activity on the same workload — same rule fired before, or other events on adjacent resources. Call `mcp__secure-mcp-server__list_runtime_events` with `scope_hours=168`, `limit=100`, and `filter_expr`:
+3. **Lateral candidates via prior events.** Look for other recent activity on the same workload — same rule fired before, or other events on adjacent resources. Call `list_runtime_events` with `scope_hours=168`, `limit=100`, and `filter_expr`:
 
    ```
    ruleName = "<rule_name>" and kubernetes.cluster.name = "<cluster>" and kubernetes.namespace.name = "<namespace>" and kubernetes.workload.name = "<workload>"

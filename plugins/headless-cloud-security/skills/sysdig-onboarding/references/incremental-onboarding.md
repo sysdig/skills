@@ -21,35 +21,49 @@ Check for existing onboarding state:
    - Host Scanning (Agentless) — not configured
    ```
 
-2. Ask what to add. Offer the same capability set as initial onboarding (see
-   [interview-questions.md](interview-questions.md) Step 3d), minus anything
-   already deployed. Omit AWS-only items (Workload Scanning)
-   for GCP/Azure accounts:
-   ```json
-   {
-     "question": "Which capabilities do you want to add to this account?",
-     "header": "Add Features",
-     "multiSelect": true,
-     "options": [
-       {"label": "Threat Detection", "description": "Cloud Logs for real-time threat detection"},
-       {"label": "Advanced Identity Analysis", "description": "Usage-based least-privilege; builds on Threat Detection's data"},
-       {"label": "Host Scanning (Agentless)", "description": "Host-disk vulnerability scanning (+ container/malware sub-options)"},
-       {"label": "Workload Scanning", "description": "Scan ECS + Lambda container images (AWS only)"}
-     ]
-   }
-   ```
+2. Ask what to add. **Use the account's own provider picker from
+   [interview-questions.md](interview-questions.md)** — Step 3d for AWS, Step 3d
+   (GCP), or Step 3d (Azure) — with the capabilities already deployed removed
+   from the options. Do not reproduce a picker here: the three differ in which
+   capabilities exist (Azure has no Advanced Identity Analysis at
+   single-subscription scope) and in how Workload Scanning is framed (ECS/Lambda
+   for AWS, Cloud Run/GKE/Cloud Functions for GCP, Container Instances-Apps/
+   Functions/AKS for Azure), and a copy here drifts from them.
+   [features.md](features.md) is the source of truth for which capabilities a
+   provider supports at all.
+
    Additive options only — do not add a "None" / "nothing more" checkbox here
    (see [interview-questions.md](interview-questions.md) Picker rules); if the
    user wants nothing, they submit an empty selection and this step ends.
    Run the matching Step 3d sub-questions (log capture method, per-feature
-   regions, Host Scanning extras) for whatever the
-   user adds.
+   regions, Host Scanning extras, and the Workload Scanning workload-type
+   question for the account's provider) for whatever the user adds.
 
 3. Generate only the delta Terraform — add new module blocks to the existing
-   configuration file, keeping existing resources untouched
+   configuration file, keeping existing resources untouched. **Two exceptions,
+   checked independently** — without them the apply resets posture flags set
+   in Sysdig, Validated Exposure among them:
+   - If the existing `config_posture` feature resource has no
+     `lifecycle { ignore_changes = [flags] }`, add that block (and no `flags`
+     argument) to it.
+   - If the `sysdiglabs/sysdig` provider constraint allows anything older than
+     3.11.2, or `.terraform.lock.hcl` pins an older version, set the constraint
+     to `>= 3.11.2, < 4.0.0`. Then delete only the
+     `provider "registry.terraform.io/sysdiglabs/sysdig"` block from
+     `.terraform.lock.hcl` and run a plain `terraform init`, which re-resolves
+     that one provider. Do **not** use `terraform init -upgrade`: it also moves
+     every module and every other provider to the newest version its constraint
+     allows — a new major where a module is unpinned or a provider has no upper
+     bound — and so changes existing resources. A plain `terraform init` without
+     the lock edit fails on the old lock entry.
+
+   Validated Exposure itself is not asked here: on an existing account
+   Terraform never changes it (`ignore_changes`), so it is changed in Sysdig.
 
 4. Run `terraform plan` — should show only new resources (additions),
-   zero changes to existing resources
+   zero changes to existing resources. If it shows an update or replacement of
+   an existing resource, stop and show it to the user before any apply; a newer
+   provider can change resources it already manages.
 
 ## Merge Strategy
 
@@ -60,6 +74,14 @@ Check for existing onboarding state:
   separate config that references the same Sysdig account. Note: this
   requires the onboarding module output (account ID) to be shared via
   `terraform_remote_state` or a data source.
+
+  The isolated directory has to *be* the working directory the terraform
+  commands run from — the skill never `cd`s into it and never passes
+  `-chdir=`, because neither form matches the `allowed-tools` patterns and both
+  turn every pre-approved terraform call into a permission prompt (see
+  [generate-config.md](generate-config.md) step 10). So ask the user to run the
+  session from that directory — or to run the terraform commands there
+  themselves — and generate into the working directory as usual.
 
 ## When to Use `terraform import`
 
@@ -77,7 +99,7 @@ Do NOT use import for standard incremental onboarding — just add new blocks.
 | Threat Detection | Onboarding module | Already present if Connection exists |
 | Advanced Identity Analysis | Threat Detection (Cloud Logs) + Connection | "Advanced Identity Analysis needs both Connection and Cloud Logs" |
 | Host Scanning (Agentless) | Onboarding module | Already present if Connection exists |
-| Workload Scanning | Onboarding module (AWS only) | Omit for GCP/Azure |
+| Workload Scanning | Onboarding module | Supported on AWS, GCP and Azure — the workload types offered differ per provider ([features.md](features.md)) |
 
 ## Confirmation Table
 

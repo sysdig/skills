@@ -10,7 +10,7 @@ over the investigation findings.
 When in doubt about parameter shapes, query the live API for the most
 accurate definition for the current tenant:
 
-Call `mcp__secure-mcp-server__list_response_actions`.
+Call `list_response_actions`.
 
 The list is contextual — pass `context_event_id: <id>` to scope it to a
 specific event and get only the actions Sysdig itself believes are
@@ -219,22 +219,22 @@ to be deployed and the relevant cloud credentials on the Sysdig side.
 Don't infer the parameter schema from this file — the tenant's live
 catalog is authoritative. The recommended flow:
 
-1. Call `mcp__secure-mcp-server__list_response_actions` with
+1. Call `list_response_actions` with
    `context_event_id: <event_id>`. The response includes a `parameters`
    array per action with name, type, required, description.
 2. Fill the params from the investigation case file (container ID, PID,
    workload selectors, etc.).
-3. Submit via `mcp__secure-mcp-server__submit_response_action` with
+3. Submit via `submit_response_action` with
    `action_type` and `parameters`.
 4. Capture the returned execution `id`. Poll
-   `mcp__secure-mcp-server__get_response_action_status` with
+   `get_response_action_status` with
    `action_execution_id` until `COMPLETED` or `FAILED`.
 
 ## Status and undo
 
 - Status is one of `ENQUEUED`, `IN_PROGRESS`, `COMPLETED`, `FAILED`.
 - Undo (for actions whose `isUndoable` is true) goes through
-  `mcp__secure-mcp-server__undo_response_action` (do NOT submit the pair
+  `undo_response_action` (do NOT submit the pair
   action directly — the API rejects manual submission of pair-undo types
   like `START_CONTAINER`, `UNPAUSE_CONTAINER`, `FILE_UNQUARANTINE`,
   `DELETE_NETWORK_POLICY`, `KUBERNETES_DELETE_VOLUME_SNAPSHOT`).

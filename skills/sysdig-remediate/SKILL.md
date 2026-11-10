@@ -54,12 +54,14 @@ allowed-tools:
   - mcp__atlassian__createJiraIssue
   - mcp__atlassian__editJiraIssue
   - mcp__atlassian__addCommentToJiraIssue
-version: 1.0.2
+version: 1.0.3
 ---
 
 ## First-run notice
 
 Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
+
+This skill describes steps by capability, not by tool name: *ask a structured question*, *get explicit confirmation*, *write a file*, *run a command*. Follow [`references/agent-capabilities.md`](references/agent-capabilities.md) for how to do each one with your agent's tools, and what to do when a capability is missing — including when nobody can answer a question.
 
 *Uses: Sysdig MCP, GitHub (`gh`) or GitLab (`glab`), `git`, optional Jira MCP/CLI for tickets.*
 
@@ -106,7 +108,7 @@ Read state via `get_skill_state`, write via `save_skill_state`. Schema and rules
 
 Run all checks before any real work. Announce each result on its own line so the user knows which paths are open before they commit to a flow.
 
-1. **Sysdig MCP authentication preflight** — required. Run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. If it tells you to abort, abort — do not call any MCP tools or perform other side effects. If a tool call later fails during normal operation, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md) to identify the specific failure. A **denied** `mcp__secure-mcp-server__*` call (the agent refuses it rather than the server erroring) is a **prefix mismatch**, not unreachability — apply the "denied / prefix mismatch" fix in that reference instead of retrying.
+1. **Sysdig MCP authentication preflight** — required. Run the preflight in [`references/auth-preflight.md`](references/auth-preflight.md) and follow its instructions exactly. If it tells you to abort, abort — do not call any MCP tools or perform other side effects. If a tool call later fails during normal operation, use the diagnostic checklist in [`references/mcp-setup.md`](references/mcp-setup.md) to identify the specific failure. A **denied** Sysdig MCP call (the agent refuses it rather than the server erroring) is a permissions issue, not unreachability — apply the "Tool calls come back denied" fix in that reference instead of retrying.
 2. **Source control** — run the selection algorithm in [`references/source_control.md`](references/source_control.md) to detect a configured GitHub (`gh`/MCP), GitLab (`glab`/MCP), or a local folder the user points at. Record `source.kind` ∈ {`github`, `gitlab`, `local`, `none`} and `source.handle` (org/group/path) in working memory; later steps key off these. `none` is allowed — it just rules out the PR deliverable.
 3. **Ticketing** — detect whether a Jira MCP/CLI is reachable, per [`references/ticketing.md`](references/ticketing.md). Record availability; absence just rules out the ticket deliverable.
 
@@ -137,7 +139,7 @@ Wait for the user's answer before proceeding.
 
 ### 1b. Choose the deliverable
 
-Ask upfront what this session should produce (AskUserQuestion), before any analysis:
+Ask upfront what this session should produce (structured question), before any analysis:
 
 > _"What should this remediation deliver for `<image>`?"_
 > 1. **PR + ticket (recommended)** — open the fix PR and file/update a tracking ticket that references it.

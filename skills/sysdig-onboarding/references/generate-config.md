@@ -36,6 +36,22 @@ write the files.
     invocation — `source .sysdig-token && AWS_PROFILE=<name> terraform plan`
     (a prefix on `source` does not reach terraform).
 
+    **Generate the files into the directory these commands run from** — the
+    current working directory. Terraform reads the configuration from the
+    working directory and never searches upward, so a config written anywhere
+    else leaves `terraform plan` reporting `No configuration files`, which
+    reads like a generation failure but is not one. Note that `terraform init`
+    exits 0 in a directory with no configuration at all ("Terraform
+    initialized in an empty directory!"), so init succeeding proves nothing
+    here. Write `.sysdig-token` alongside the config so
+    `source .sysdig-token` resolves too. Do not `cd` and do not add
+    `-chdir=<dir>`: neither form matches the `allowed-tools` patterns in
+    SKILL.md, so both turn a pre-approved terraform call into a permission
+    prompt. This holds for the isolated-directory option in
+    [incremental-onboarding.md](incremental-onboarding.md) Merge Strategy too —
+    an isolated directory is one the terraform commands *run from*, not one the
+    skill changes into.
+
 **Terraform plan summary:** After `terraform plan`, parse the summary line
 and present a structured overview:
 ```
@@ -61,7 +77,7 @@ present `helm upgrade --install` for user approval.
 `values.yaml` directly (Sysdig UI → Settings → Agent Keys), the same as they
 edit `.sysdig-token` for the Cloud path. Never ask the user to paste the key in
 chat, never pass it via `helm --set`, and never route it through a
-`! export`-style env var — the agent's Bash tool calls run in fresh subshells
+`! export`-style env var — the commands the agent runs execute in fresh subshells
 that don't inherit the user's interactive shell, so that value never reaches
 Helm. See [shield.md §7.2](shield.md) for the full rule.
 

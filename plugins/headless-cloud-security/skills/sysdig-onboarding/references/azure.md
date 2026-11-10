@@ -190,8 +190,8 @@ management-group hierarchy and unlocks capabilities that are tenant-scoped:
 Tenant onboarding uses `templates/azure_tenant.tf`.
 
 > **Tenant scope is Experimental — the template is not verified against the
-> current 3.x modules.** `azure_tenant.tf` pins older provider and module
-> versions and reads `module.config-posture.config_posture_component_id`, an
+> current 3.x modules.** `azure_tenant.tf` leaves its module versions unpinned
+> and reads `module.config-posture.config_posture_component_id`, an
 > output the 3.x `config-posture` module does not expose (it is
 > `service_principal_component_id`), so `terraform plan` fails on it. Present
 > tenant onboarding as Experimental, and reconcile every module input and output
@@ -217,7 +217,7 @@ and `account_id = module.onboarding.sysdig_secure_account_id`. Feature resources
 (`sysdig_secure_cloud_auth_account_feature`) reference each module's component-id
 output.
 
-The Sysdig provider is pinned `~> 3.3`; the `azurerm` provider `~> 3`. The
+The Sysdig provider is pinned `>= 3.11.2, < 4.0.0`; the `azurerm` provider `~> 3`. The
 `azuread` provider is configured with the tenant ID so the onboarding module can
 create the Entra ID application.
 

@@ -19,7 +19,7 @@ this workload, using SysQL..."). Per principle C-01, no silent probes.
 
 ## Sysdig MCP — SysQL recipes
 
-Run via `mcp__secure-mcp-server__run_sysql`. SysQL schema varies by tenant
+Run via `run_sysql`. SysQL schema varies by tenant
 — if a query is rejected, try the alternate relation shapes listed below.
 
 ### Identify the workload from a container ID
@@ -76,7 +76,7 @@ MATCH KubeServiceAccount AS sa ASSUMES CloudIamRole AS r
 
 ### Recent events on the same workload
 
-Use `mcp__secure-mcp-server__list_runtime_events` directly:
+Use `list_runtime_events` directly:
 
 ```json
 {

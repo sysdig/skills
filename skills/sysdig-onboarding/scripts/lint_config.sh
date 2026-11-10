@@ -127,15 +127,68 @@ for f in "$@"; do
       [[ -z "$hit" ]] && continue
       lineno="${hit%%:*}"
       content="${hit#*:}"
-      rhs="${content#*[:=]}"
-      case "$rhs" in
-        *var.*|*local.*|*\$\{*|*REPLACE_WITH*|*PASTE_YOUR*|*\{\{*) continue ;;
-      esac
-      # Strip quotes/spaces; warn on long literal values (secret-length)
-      val=$(echo "$rhs" | tr -d '"'"'"' ' | tr -d ',')
-      if [[ ${#val} -ge 20 ]]; then
-        warning "$f" "line ${lineno}: credential key has a literal value — freshly generated configs must use a var reference or REPLACE_WITH_ placeholder (fine if the user already pasted their real key)"
-      fi
+      # Measure EVERY credential-keyed assignment on the line, taking the value
+      # from the delimiter that follows the keyword. Splitting the line on its
+      # first delimiter instead misses a literal that is not the first pair:
+      #   tags = { Name = "prod", access_key = "AKIA..." }
+      #     -> the first pair is `tags`/`Name`, so the real literal never gets
+      #        measured at all.
+      #
+      # The key must *be* an assignment, so it is anchored to line start, `{`
+      # or `,` (with an optional YAML `- `). Matching the keyword anywhere on
+      # the line instead measures it inside someone else's value:
+      #   description = "... export TF_VAR_sysdig_secure_api_token=<token>"
+      #     -> the skill's own generated variables.tf warned on every AWS run,
+      #        which teaches users to ignore lint. Excluding it by value length
+      #        would only work while that placeholder stays short.
+      #   This anchor is a heuristic, not a parser: a credential-shaped
+      #   assignment sitting immediately after a comma *inside* a string would
+      #   still match. Parsing HCL and YAML properly is not worth it in a lint
+      #   that must run with no dependencies.
+      #
+      # The value is a quoted string taken whole, or an unquoted bare token:
+      #   api_token = "abc,defghijklmnopqrstuvwxyz"
+      #     -> bounding the value at the first `,` measured `"abc` and missed a
+      #        comma-bearing literal.
+      # The bare branch excludes quotes and whitespace deliberately. ERE is
+      # leftmost-longest, so an unbounded fallback out-matched the quoted
+      # branch whenever a same-line `# comment` followed the value, and the
+      # comment text landed in the value — wrong in both directions:
+      #   access_key = "AKIA..."  # TODO: move to var.access_key later
+      #     -> `var.` in the comment excluded a real secret as a reference.
+      #   access_key = "short"  # replace with the real key
+      #     -> the comment padded a 5-char value past the length threshold.
+      pairs=$(grep -o -E '(^|[{,])[[:space:]]*(-[[:space:]]+)?[A-Za-z0-9_.-]*(api_token|access_key|customerid|secret)[A-Za-z0-9_.-]*[[:space:]"'"'"']*[:=][[:space:]]*("[^"]*"|'"'"'[^'"'"']*'"'"'|[^,}"'"'"'[:space:]]*)' <<< "$content" || true)
+      while IFS= read -r pair; do
+        [[ -z "$pair" ]] && continue
+        pair="${pair#[\{,]}"                                  # drop the anchor
+        pair="${pair#"${pair%%[![:space:]]*}"}"
+        pair="${pair#-}"                                       # YAML sequence dash
+        pair="${pair#"${pair%%[![:space:]]*}"}"
+        key="${pair%%[[:space:]:=]*}"
+        key="${key//\"/}"
+        key="${key//\'/}"
+        rhs="${pair#*[:=]}"
+        # Trim surrounding whitespace, then unwrap at most one layer of quotes.
+        # Never strip characters out of the value itself: the previous
+        # `tr -d ',}'` deleted those from the payload too, so a 20-char literal
+        # ending in `}` measured 19 and slipped under the threshold.
+        val="${rhs#"${rhs%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        case "$val" in
+          '"'*'"'|"'"*"'") val="${val:1:${#val}-2}" ;;
+        esac
+        # References and placeholders are the required output, not secrets.
+        # Matched against the WHOLE value: as substrings, `{{PLACEHOLDER}}` or
+        # `var.` pasted in front of a real key hid it from the whole check.
+        case "$val" in
+          var.*|local.*|*\$\{*) continue ;;
+          \{\{*\}\}|REPLACE_WITH*|PASTE_YOUR*) continue ;;
+        esac
+        if [[ ${#val} -ge 20 ]]; then
+          warning "$f" "line ${lineno}: credential key '${key}' has a literal value — freshly generated configs must use a var reference or REPLACE_WITH_ placeholder (fine if the user already pasted their real key)"
+        fi
+      done <<< "$pairs"
     done <<< "$suspects"
   fi
 

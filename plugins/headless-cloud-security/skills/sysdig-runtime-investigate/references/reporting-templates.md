@@ -9,7 +9,7 @@ Five blocks:
 
 ## Output format choice (Phase 3)
 
-Before writing the file, ask the user via `AskUserQuestion`:
+Before writing the file, ask the user a structured question:
 
 > "How do you want the report rendered? `Markdown` (default — plays nice with Jira/PagerDuty handoff) / `HTML` (renders Mermaid diagrams in browser, self-contained) / `Both`."
 
@@ -17,7 +17,7 @@ Before writing the file, ask the user via `AskUserQuestion`:
 - `HTML` → write the Block 4 wrapper around the same Block 1 content to `/tmp/sysdig-runtime-investigate-<id>-<ts>.html`. Open with `open /tmp/...html` to view in the default browser.
 - `Both` → write both files. The summary citation lists both paths.
 
-If `AskUserQuestion` is not available (some agent clients), default to `Markdown` only and mention in the summary that HTML is also available — point the user at the command to regenerate.
+If nobody can answer (e.g. a non-interactive run), default to `Markdown` only and mention in the summary that HTML is also available — point the user at the command to regenerate.
 
 ## Block 0 — User-facing summary (2 paragraphs, no tables)
 
@@ -60,7 +60,7 @@ event is opportunistic recon: 4/5.">
 ## What happened
 
 - **Trigger:** <rule name(s)>, classified as <MITRE tactic>.
-- **Process tree (from `mcp__secure-mcp-server__get_event_process_tree`, if available):** render as `parent → child → grandchild` with command-line snippets where useful. Fall back to "no process tree available" if the MCP call returned nothing or wasn't loaded.
+- **Process tree (from `get_event_process_tree`, if available):** render as `parent → child → grandchild` with command-line snippets where useful. Fall back to "no process tree available" if the MCP call returned nothing or wasn't loaded.
 - **Process evidence (parsed from threat description):** <e.g. "systemd → sshd → bash → locale (repeated)". Lift this from `aiGeneratedDescription` parsing — keeps the AI's narrative read alongside the structured tree.>
 - **Resource:** <cluster/namespace/workload> *(or `host <hostname>` for non-K8s)*.
 - **AI-generated rationale:** <1–2 sentences summarising `aiGeneratedDescription`.>
@@ -99,7 +99,7 @@ fold its child connections/files into this table inline.
 
 Render this section as a Mermaid `flowchart LR` followed by a compact timeline table, **only** when at least two of the following hold:
 
-- `case.incident_threat_groups` has ≥ 2 entries (the case spans multiple Threats Engine groups).
+- `case.incident_threat_groups` has ≥ 2 entries (the case spans multiple Threats Engine threats).
 - 3+ MITRE tactics fired across the chain (count the trigger + watchlist hits).
 - The chain spans at least two domains (K8s + cloud account, host + container, container + cluster API server, etc.).
 
@@ -208,7 +208,7 @@ Keep it tight: one row per diagram node, in chronological order. Use inline code
 ## Resource context
 
 - **Cluster / host metadata:** <e.g. "GCP node in cluster `ai-attack-demo`, region europe-west1">.
-- **Sibling workloads on this resource:** <list 3–5 from `mcp__secure-mcp-server__run_sysql` siblings query. If empty, "no siblings surfaced".>
+- **Sibling workloads on this resource:** <list 3–5 from `run_sysql` siblings query. If empty, "no siblings surfaced".>
 - **Prior events on this resource (last 7d):** <count + 1-line rule summary, e.g. "4 prior events: 2× Discovery, 1× Defense Evasion, 1× same rule firing 2 days ago". If empty, "no prior events".>
 - **ServiceAccount RBAC** *(K8s workload threats only)*: <one-line summary of bound roles, e.g. "default SA with cluster-wide list/get on Pods + Deployments — explains kubectl-style lateral capability". If skipped, "RBAC not enumerated".>
 
@@ -221,7 +221,7 @@ If watchlist hits exist, render them as a table — they are the strongest signa
 | Time | Source | Rule | Resource | Why it matters |
 |------|--------|------|----------|----------------|
 
-If `case.incident_threat_groups` is non-empty (incident-scope detection from Phase 1), prefix the table with: *"This case spans Threats Engine groups: [<group1 name>], [<group2 name>], [<group3 name>] — single incident, unified narrative."*
+If `case.incident_threat_groups` is non-empty (incident-scope detection from Phase 1), prefix the table with: *"This case spans Threats Engine threats: [<threat1 name>], [<threat2 name>], [<threat3 name>] — single incident, unified narrative."*
 
 Cloud-API summary: <if cloudtrail integrated, summarise S3/IAM/IMDS hit counts; otherwise "No CloudTrail integration in this tenant".>
 

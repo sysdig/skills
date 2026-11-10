@@ -4,7 +4,7 @@
 document.** But *when* a skill or a user needs to generate a **presentation artifact
 the skill itself renders** — a report, a PDF, an HTML page or email, a dashboard or
 slide — keep it on-brand with the Sysdig **report engine** and **brand kit** (MCP tools
-on `secure-mcp-server`) instead of hand-crafting styling. This file is the shared source
+on the Sysdig MCP server) instead of hand-crafting styling. This file is the shared source
 of truth; skills link to it rather than restating it.
 
 > **Scope.** This applies only to presentation artifacts a skill renders itself. It does
@@ -69,7 +69,7 @@ needs plan **write** access where the first two need read. A read-only identity 
 through the outline and then fails on save — if that happens, say the user lacks
 permission to store a report on this plan and offer the outline instead.
 
-## Tool catalog (`secure-mcp-server`)
+## Tool catalog (Sysdig MCP server)
 
 | Tool | Path | Purpose |
 |---|---|---|

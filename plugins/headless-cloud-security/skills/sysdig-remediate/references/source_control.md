@@ -26,7 +26,7 @@ Run this in step 0b of `SKILL.md`, before touching any other tool. Stop on the f
 
 3. **Probe the local fallback.** If the user passed a folder argument (e.g. `--source <path>`) or there is a `.git` directory under the cwd that the user confirms corresponds to the image, use `local`.
 
-4. **None found.** Ask the user (via `AskUserQuestion` if available):
+4. **None found.** Ask the user (as a structured question):
 
    > No configured source was found. A pull request needs the source that builds this image. Pick one:
    > 1. Configure `gh` or `glab` and retry

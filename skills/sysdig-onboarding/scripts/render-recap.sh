@@ -37,6 +37,7 @@ aws|Caller
 *|Scope
 *|Sysdig Region
 *|Capabilities
+*|Validated Exposure
  |Log capture mode
  |Cloud Logs regions
  |Host Scanning extras

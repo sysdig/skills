@@ -41,7 +41,7 @@ allowed-tools:
   - mcp__secure-mcp-server__save_plan_report
   - mcp__secure-mcp-server__get_brand_kit
   - mcp__secure-mcp-server__get_design_tokens
-version: 1.0.2
+version: 1.0.3
 ---
 
 ## First-run notice
@@ -49,7 +49,7 @@ version: 1.0.2
 Before doing any other work for this skill, follow [`references/first-run-notice.md`](references/first-run-notice.md) exactly.
 
 
-When you need to ask the user a question, get confirmation, or present choices, use the `AskUserQuestion` tool if available. This ensures proper rendering across all agent clients.
+This skill describes steps by capability, not by tool name: *ask a structured question*, *get explicit confirmation*, *write a file*, *run a command*. Follow [`references/agent-capabilities.md`](references/agent-capabilities.md) for how to do each one with your agent's tools, and what to do when a capability is missing — including when nobody can answer a question.
 
 ## On-brand output
 
@@ -118,7 +118,7 @@ or
 
 > _"This is an ad-hoc findings question — I'll query the findings directly. (Say 'plans' if you'd rather work through your remediation backlog.)"_
 
-**When genuinely ambiguous**, ask one question (AskUserQuestion) with exactly two options: work through the prioritized remediation backlog (Plans) vs. explore/slice the findings data (Findings).
+**When genuinely ambiguous**, ask one structured question with exactly two options: work through the prioritized remediation backlog (Plans) vs. explore/slice the findings data (Findings).
 
 **Gate on `sage.next.enabled`:** if the Plans flow is chosen but the flag is false, tell the user plan-driven prioritization isn't enabled for this tenant and continue with the Findings flow instead. Never name the flag itself in the conversation — it's an internal setting key; the plain-language message is the user-facing form.
 
@@ -183,7 +183,17 @@ Map the confirmed choice to the `target_measure` parameter.
 
 #### 2d. Fetch and present the ranked jobs
 
-**Plan path:** call `list_plan_remediation_jobs` for the selected plan, filtered to `states: ["open", "in_progress"]` — never surface closed or archived jobs.
+**Plan path:** `list_plan_remediation_jobs` takes a single `state` (not a list), so call it twice — in parallel — for the two states worth showing:
+- `list_plan_remediation_jobs(plan_id: <plan_id>, state: "open", limit: 10)`
+- `list_plan_remediation_jobs(plan_id: <plan_id>, state: "in_progress", limit: 10)`
+
+Never request the other three states: `closed` and `archived` jobs are finished work, and a `skipped` job is one the user has already declined.
+
+Each call returns its own rows already ranked by the plan's measure, but the two rankings are independent and there is no cross-call ordering key to merge them on — **so do not interleave or re-sort them.** Present the `open` rows first, in the order that call returned them, then the `in_progress` rows as a second group under the same header, labelled _"already in progress"_. If the same `global_id` comes back in both (it changed state between the two calls), keep it in the `in_progress` group only.
+
+The top job is therefore the first `open` row. If there are no `open` rows at all, use the first `in_progress` row instead and say that it is already underway.
+
+If both calls come back empty the plan has nothing to walk: _"`<plan title>` has no open or in-progress jobs — everything in its scope is remediated, closed, or skipped."_ Offer the Free path (step 2c) for a different scope or measure, and stop. Do not enter step 2e.
 
 **Free path:** call `explore_jobs` with:
 - `target_measure`: the confirmed measure from step 2c
@@ -200,14 +210,14 @@ Each `explore_jobs` row carries a `tracked: bool` field:
 - `tracked: true` — a persisted Job already in the catalog (Plan-path jobs are always tracked).
 - `tracked: false` — a virtual candidate computed on-the-fly. **Do not promote it** — `track_job` belongs to `/sysdig-remediate`, which calls it only at its commit point (when the user confirms a deliverable).
 
-Present the results as a ranked table, **preserving the tool's row order** — the rows are already ranked by the measure; re-sorting would change which job is "the top one":
+Present the results as a ranked table, **preserving the tool's row order** — the rows are already ranked by the measure; re-sorting would change which job is "the top one". On the Plan path that means the two `state` groups from above, each kept in its own returned order:
 
 | # | Image | Tracked | Ranking Summary | Finding Percentage | Finding Count | Resource Count |
 |---|-------|---------|--------|--------------------|---------------|----------------|
 | 1 | quay.io/org/app:1.2 | Yes | 9 fixable+exposed findings | 30% | 17 | 23 |
 | 2 | quay.io/org/svc:2.0 | No  | 16 fixable+exposed findings | 12% | 43 | 44 |
 
-After the table, tell the user how much they're seeing. If the API response includes a total count, print _"Showing top 10 of N — say 'more' to expand or describe a filter."_; otherwise print _"Showing the top 10. Say 'more' to fetch additional results or 'filter' to narrow."_ When the user says "more", re-call the same tool with a higher `limit`.
+After the table, tell the user how much they're seeing. If the API response includes a total count, print _"Showing top 10 of N — say 'more' to expand or describe a filter."_; otherwise print _"Showing the top 10. Say 'more' to fetch additional results or 'filter' to narrow."_ When the user says "more", re-call with a higher `limit` — on the Plan path that is both `state` calls, not just one.
 
 _"The riskiest jobs have already been ranked by impact. Let's start with the top one."_ Then proceed to step 2e for the top-ranked job. The user can say "skip this one" or "start with #3" to redirect.
 
@@ -216,8 +226,15 @@ _"The riskiest jobs have already been ranked by impact. Let's start with the top
 For the current job:
 
 1. **Read its artifacts first** (tracked jobs only): `list_artifacts(parent_kind: "job", parent_id: <job_global_id>)`. Surface what exists — _"This job already has a ticket: `<reference_key>` (`<reference_url>`)"_, _"A PR was opened previously: `<reference_url>`"_, _"Previous session note: `<content>`"_. Existing work does not block the handoff — `/sysdig-remediate` runs its own dedup and will adopt or update it. Untracked candidates have no artifacts by definition (no catalog row) — skip this call.
-2. **Show impact**: call `get_job_impact` with the job id and present a concise summary — what the job's findings are, workload spread, exposure — at the level a decision needs, not a data dump.
-3. **Offer exactly three options** (AskUserQuestion): **Remediate** (hand off to `/sysdig-remediate`), **Skip** (move on, recording why), or **Stop** (wrap up the session).
+2. **Show impact** (tracked jobs only): call `get_job_impact`. It requires **both** `job_id` and `target_measure` — passing the job id alone is rejected. Pass:
+   - `job_id`: the job's catalog `global_id`
+   - `target_measure`: on the Plan path, the plan's own measure (the one presented in step 2b); on the Free path, the measure confirmed in step 2c. The job's impact is only meaningful relative to the measure it is being ranked by.
+   - `zone_ids`: the zone IDs of the scope this session is working in — the plan's scope zones on the Plan path (the ones presented in step 2b), the confirmed zone on the Free path. For label-based scoping pass `scope.raw` rules instead. If the scope carries no zone IDs, omit both and tell the user the impact numbers are customer-wide, not scoped.
+
+   Untracked candidates from `explore_jobs` have no catalog row and 404 here — skip the call for them and summarize from the `explore_jobs` row you already have. If the response carries `found_in_scope: false`, the job has no findings under this scope: say that rather than presenting its zeroed counts.
+
+   Present a concise summary — what the job's findings are, workload spread, exposure — at the level a decision needs, not a data dump.
+3. **Offer exactly three options** (structured question): **Remediate** (hand off to `/sysdig-remediate`), **Skip** (move on, recording why), or **Stop** (wrap up the session).
 
 **Remediate.** Announce the handoff and confirm:
 
@@ -371,7 +388,7 @@ Apply this template to:
 - **`explore_jobs` errors** beyond the "empty result" case (4xx/5xx, scope mismatch, missing zone access).
 - **SysQL failures** in the Findings-flow escape hatch (malformed query, MCP timeout).
 - **`save_skill_state` conflicts** — after one merge-and-retry attempt fails, surface the conflict with what/why/fix instead of silently retrying.
-- **A denied MCP tool call** — the agent refuses a `mcp__secure-mcp-server__*` call rather than the server returning an error. This is a **prefix mismatch**, not unreachability: the Sysdig MCP server is registered under a different prefix in this agent. Point the user to the "denied / prefix mismatch" fix in [`references/mcp-setup.md`](references/mcp-setup.md) instead of retrying.
+- **A denied MCP tool call** — the agent refuses a Sysdig MCP call rather than the server returning an error. This is a permissions issue, not unreachability: the agent's settings don't pre-approve that tool. Point the user to the "Tool calls come back denied" fix in [`references/mcp-setup.md`](references/mcp-setup.md) instead of retrying.
 
 ## Important rules
 
@@ -380,7 +397,7 @@ Apply this template to:
 - **This skill produces no deliverables.** Never create or update tickets, never open PRs, never apply fixes — `/sysdig-remediate` owns all of it.
 - **Never call `track_job` or `close_job`.** Tracking happens at `/sysdig-remediate`'s commit point; closing happens there when work is filed. This skill doesn't have these tools and must not work around that.
 - Never invoke `/sysdig-remediate` on an image without the user's explicit approval.
-- Never re-order ranked-jobs tables — the server ranking (by measure) is the priority order; present rows as returned.
+- Never re-order ranked-jobs tables — the server ranking (by measure) is the priority order; present rows as returned. On the Plan path, the `open` and `in_progress` calls are two separate rankings: keep each group in its own returned order and never merge them into one sorted list.
 - **Respect the user's "no".** When the user skips an image, mark the matching `plan` entry `skipped` and never re-suggest it within the session.
 - **Artifacts are the primary source of truth.** When `skill_state` and job/plan artifacts conflict, trust the artifacts — they are server-side, survive across agents and sessions, and reflect what actually happened. Update `skill_state` to match, never the reverse.
 - **Always read before acting.** Call `list_artifacts` for a plan at session start and for each tracked job before offering options on it.

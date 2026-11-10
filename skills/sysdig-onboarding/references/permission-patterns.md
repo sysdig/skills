@@ -141,6 +141,8 @@ Commands that never modify resources. Safe to auto-allow unconditionally.
 | `Bash(az role assignment list*)` | `az role assignment list --assignee ...` | None — reads RBAC |
 | `Bash(az ad signed-in-user show*)` | `az ad signed-in-user show --query id ...` | None — identity check |
 | `Bash(command -v *)` | `command -v terraform`, `command -v aws`, etc. | None — checks if tool exists |
+| `Bash(test -s .sysdig-token)` | `test -s .sysdig-token` | None — exit code only, never prints the file |
+| `Bash(grep -c PASTE_YOUR_TOKEN_HERE .sysdig-token)` | placeholder check | None — prints a match count, never the file |
 | `Bash(echo "${SYSDIG_SECURE_API_TOKEN:+SET}")` | token presence check | None — prints `SET` or nothing, never the token value |
 | `Bash(uname *)` | `uname -r` | None — kernel version |
 | `Bash(systemctl status *)` | `systemctl status dragent` | None — service status |
@@ -208,6 +210,9 @@ Every command the skill executes, organized by workflow step.
 | `az account show --query tenantId --output tsv` | READ-ONLY | None — tenant info |
 | `kubectl cluster-info` | READ-ONLY | None — cluster connectivity |
 | `kubectl config current-context` | READ-ONLY | None — context name |
+| `test -s .sysdig-token` | READ-ONLY | None — exit code only, never prints the file |
+| `grep -c PASTE_YOUR_TOKEN_HERE .sysdig-token` | READ-ONLY | None — match count only, never prints the file |
+| `source .sysdig-token && scripts/detect-region.sh --save-url` | SETUP | Rewrites only the `SYSDIG_BASE_URL` line of `.sysdig-token` (mode 600); never prints it |
 | `uname -r` | READ-ONLY | None — kernel version (host shield) |
 
 ### Step 6a: Permission Pre-flight (`check_permissions.sh`)
@@ -290,7 +295,7 @@ Capability → `<features>` argument mapping: see [permissions.md](permissions.m
 
 ## File Operations Catalog
 
-Files the skill creates or modifies via Write/Edit tools.
+Files the skill creates or modifies with the agent's file-write and file-edit tools.
 
 ### Generated Files (Step 7)
 
@@ -433,6 +438,9 @@ script-level pattern and don't need individual entries.
 "Bash(ls *)",
 // Token presence check — prints SET or nothing, never the value
 "Bash(echo \"${SYSDIG_SECURE_API_TOKEN:+SET}\")",
+// .sysdig-token checks — exit code / match count only, never the content
+"Bash(test -s .sysdig-token)",
+"Bash(grep -c PASTE_YOUR_TOKEN_HERE .sysdig-token)",
 // Host (Linux) read-only. The draios-agent package registers the `dragent`
 // unit; systemctl start/enable/restart are Tier 2 and deliberately absent.
 "Bash(systemctl status dragent*)",

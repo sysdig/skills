@@ -1,6 +1,9 @@
 # Interview Questions Reference
 
-AskUserQuestion JSON specifications for each step of the discovery interview.
+Structured-question JSON specifications (header, question, options,
+`multiSelect`) for each step of the discovery interview. Pass them to your
+agent's structured-question tool, or render them as a numbered plain-text list
+when it has none — see `agent-capabilities.md`.
 SKILL.md references this file instead of embedding JSON inline.
 
 ## Picker rules (apply to every question in this file)
@@ -26,7 +29,7 @@ SKILL.md references this file instead of embedding JSON inline.
 
 ## Step 1: Target & Mode
 
-Use **one AskUserQuestion call** for the target. Guided mode is the default
+Ask **one structured question** for the target. Guided mode is the default
 — do NOT ask the user to choose a mode.
 
 ```json
@@ -194,7 +197,8 @@ Briefly explain before showing the first selector:
 If the user picks "No, foundational is enough", skip Step 3d (b) and every
 capability-dependent sub-step below (3d-ii log capture, 3d-iii host scanning
 sub-options & regions, Lambda scanning). Still show the DSPM
-note at the end of this step, then proceed to Step 3e.
+note at the end of this step, then ask Step 3d-v (Validated Exposure) and
+proceed to Step 3e.
 
 ### Step 3d (b) — capability multi-select (only if gateway = Yes)
 
@@ -670,6 +674,55 @@ sub-marker inside the GCP `WORKLOAD_SCANNING` block (alongside `WORKLOAD_GKE` /
 `WORKLOAD_FUNCTIONS` for the other workload types) and remove the ones the user
 did not select. The GCP module has no per-target variable, so there is no
 placeholder to resolve there.
+
+---
+
+## Step 3d-v: Validated Exposure
+
+Ask for every AWS, GCP and Azure cloud account, single or organization scope,
+whatever was chosen in Step 3d — it is an option of the foundational Posture
+feature. Do not offer it for IBM Cloud or OCI. Single-select, asked as its own
+turn.
+
+Briefly explain before showing it:
+
+> **Validated Exposure** confirms which of your internet-facing endpoints are
+> actually reachable. Enabling it authorizes Sysdig to actively probe those
+> endpoints from Sysdig scanner IPs. It is off unless you turn it on.
+
+**Single account / project / subscription:**
+
+```json
+{
+  "question": "Enable Validated Exposure on this account?",
+  "header": "Exposure",
+  "multiSelect": false,
+  "options": [
+    {"label": "Enable Validated Exposure", "description": "Sysdig actively probes internet-facing endpoints to confirm which exposures are reachable"},
+    {"label": "Not now", "description": "Posture runs without active probing"}
+  ]
+}
+```
+
+**Organization / tenant scope** — the flag is set on the management account and
+applies to every member account, so the question says so:
+
+```json
+{
+  "question": "Enable Validated Exposure for the organization? It applies to every member account.",
+  "header": "Exposure",
+  "multiSelect": false,
+  "options": [
+    {"label": "Enable Validated Exposure", "description": "Sysdig actively probes internet-facing endpoints in every member account to confirm which exposures are reachable"},
+    {"label": "Not now", "description": "Posture runs without active probing"}
+  ]
+}
+```
+
+Resolve `{{VALIDATED_EXPOSURE_ENABLED}}` to `true` for "Enable Validated
+Exposure" and `false` for "Not now". Write the bare word: the template already
+wraps the placeholder in quotes, so the result is `"true"` / `"false"`. Never
+remove the key or leave the placeholder.
 
 ---
 

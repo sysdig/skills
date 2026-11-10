@@ -2,7 +2,13 @@
 # detect-region.sh — Auto-detect Sysdig SaaS region from API token
 #
 # Usage:
-#   detect-region.sh
+#   detect-region.sh [--save-url]
+#
+#   --save-url  On success, write `export SYSDIG_BASE_URL="<secure_url>"` into
+#               ./.sysdig-token (replacing an existing SYSDIG_BASE_URL line, or
+#               appending one). The file is rewritten in place with mode 600
+#               and its contents are never printed — the agent must not open,
+#               cat or grep .sysdig-token to edit that line itself.
 #
 # Environment (set before calling, e.g. via `source .sysdig-token`):
 #   SYSDIG_SECURE_API_TOKEN — API token (REQUIRED)
@@ -39,6 +45,47 @@ NC='\033[0m'
 pass() { echo -e "  ${GREEN}✓${NC} $1"; }
 fail() { echo -e "  ${RED}✗${NC} $1"; }
 warn() { echo -e "  ${YELLOW}!${NC} $1"; }
+
+# --- Arguments ---
+SAVE_URL=0
+for arg in "$@"; do
+  case "$arg" in
+    --save-url) SAVE_URL=1 ;;
+    -h | --help)
+      sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *)
+      fail "Unknown argument: $arg (usage: detect-region.sh [--save-url])"
+      exit 2 ;;
+  esac
+done
+
+# save_base_url <url> — set SYSDIG_BASE_URL in ./.sysdig-token without ever
+# printing the file (it holds the token).
+save_base_url() {
+  local file=".sysdig-token" url="$1" tmp
+  if [[ ! -f "$file" ]]; then
+    warn "No .sysdig-token in $(pwd) — SYSDIG_BASE_URL not saved"
+    return 0
+  fi
+  tmp=$(mktemp "${file}.XXXXXX")
+  chmod 600 "$tmp"
+  if ! awk -v url="$url" '
+      /^[[:space:]]*(export[[:space:]]+)?SYSDIG_BASE_URL=/ {
+        if (!done) print "export SYSDIG_BASE_URL=\"" url "\""
+        done = 1
+        next
+      }
+      { print }
+      END { if (!done) print "export SYSDIG_BASE_URL=\"" url "\"" }
+    ' "$file" >"$tmp"; then
+    rm -f "$tmp"
+    fail "Could not update SYSDIG_BASE_URL in .sysdig-token"
+    return 1
+  fi
+  mv "$tmp" "$file"
+  pass "Saved SYSDIG_BASE_URL=${url} to .sysdig-token"
+}
 
 # --- Prerequisites ---
 if ! command -v curl &>/dev/null; then
@@ -115,6 +162,9 @@ for i in "${!REGIONS[@]}"; do
     echo "Region detected: ${region_id}"
     echo "API URL: ${api_url}"
     echo "Secure URL: ${secure_url}"
+    if [[ "$SAVE_URL" -eq 1 ]]; then
+      save_base_url "$secure_url"
+    fi
     exit 0
   fi
 done

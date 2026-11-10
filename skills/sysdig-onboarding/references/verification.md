@@ -1,8 +1,8 @@
 # Post-Installation Verification (Step 8 detail)
 
 Procedural detail for [SKILL.md](../SKILL.md) **Step 8**. **Always run
-verification checks via a subagent** (Agent tool) to keep the main conversation
-clean. The subagent handles retries and verbose output, then returns a
+verification checks via a subagent** (inline if your agent has no subagents) to
+keep the main conversation clean. The subagent handles retries and verbose output, then returns a
 structured result. The work is mechanical — a small/fast model (e.g. Haiku)
 is sufficient when the client supports choosing one.
 

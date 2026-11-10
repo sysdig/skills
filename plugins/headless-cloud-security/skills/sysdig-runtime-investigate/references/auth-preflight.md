@@ -10,21 +10,34 @@ Scan the agent's currently available tool list. Do not call any tool to perform 
 
 **Do not narrate the check.** Once you've identified the state, output the action specified for that state and nothing else. The user does not need to hear about "states," tool names, or probes — that vocabulary is internal to this preflight. For State 1, proceed silently. For State 2 and State 3, emit the verbatim message as the entirety of your response.
 
-There are three possible states, distinguished by which tools containing `secure-mcp-server` in their name are visible. **Match by suffix, not by exact prefix** — the prefix varies by install mode (e.g. `mcp__secure-mcp-server__get_customer_settings` for user-level `claude mcp add`, `mcp__plugin_<plugin-name>_secure-mcp-server__get_customer_settings` for plugin install). The MCP server name itself (`secure-mcp-server`) and the tool names (`get_customer_settings`, `authenticate`, `complete_authentication`) are invariant across all install modes.
+## How Sysdig tools are named
 
-### State 1 — a tool whose name ends in `secure-mcp-server__get_customer_settings` is visible
+The skills refer to Sysdig MCP tools by their **bare tool name** — `get_customer_settings`, `run_sysql`, `list_runtime_events`, and so on. The fully-qualified name your agent sees depends on the client and on the name the server was registered under, for example:
+
+- `get_customer_settings` (Claude Code, `claude mcp add … secure-mcp-server …`)
+- `mcp__plugin_<plugin-name>_<server-name>__get_customer_settings` (Claude Code plugin install)
+- `mcp__claude_ai_<Connector_Name>__get_customer_settings` (claude.ai / organization-managed connector)
+- `<server-name>_get_customer_settings`, `<server-name>.get_customer_settings`, or just `get_customer_settings` (other clients)
+
+**Match by tool-name suffix and ignore the prefix.** Whenever a skill says "call `run_sysql`", call the visible tool whose name ends in `run_sysql` and that belongs to the Sysdig MCP server. Never assume a particular server name.
+
+To identify **which** server is the Sysdig one, look for the server that exposes Sysdig-specific tools such as `get_customer_settings`, `run_sysql`, and `list_runtime_events` together. If more than one server matches, prefer the one whose name refers to Sysdig (e.g. contains `sysdig` or `secure`), and ask the user if it is still ambiguous.
+
+## The three states
+
+### State 1 — a Sysdig tool ending in `get_customer_settings` is visible
 
 The server is registered, the user has authenticated, and the full tool catalog is reachable. **Proceed with the skill.**
 
-### State 2 — only tools ending in `secure-mcp-server__authenticate` and `secure-mcp-server__complete_authentication` are visible
+### State 2 — a Sysdig server is visible but exposes only `authenticate` / `complete_authentication`
 
-The server is registered but the user hasn't signed in yet. **Stop** and tell the user verbatim:
+The server is registered but the user hasn't signed in yet. Because `authenticate` is generic to any OAuth-protected MCP server, only treat it as the Sysdig server when its name refers to Sysdig (e.g. contains `sysdig` or `secure`). **Stop** and tell the user verbatim:
 
 > The Sysdig MCP server is registered but needs sign-in. In Claude Code, run `/mcp`, select the Sysdig MCP server entry, and click **Authenticate** (your browser opens to finish). Once it's done, re-invoke this skill.
 
-Do **not** call any `*secure-mcp-server__authenticate` tool yourself. That tool opens a browser without user warning, which is a hostile experience. Always let the user drive the `/mcp` flow.
+Do **not** call the `authenticate` tool yourself. That tool opens a browser without user warning, which is a hostile experience. Always let the user drive the `/mcp` flow.
 
-### State 3 — no tool whose name contains `secure-mcp-server` is visible at all
+### State 3 — no Sysdig MCP server is visible at all
 
 The server is not registered. **Stop** and tell the user verbatim:
 
@@ -32,7 +45,7 @@ The server is not registered. **Stop** and tell the user verbatim:
 >
 >     claude mcp add --transport http secure-mcp-server https://<region>/mcp/secure
 >
-> Use your tenant's regional URL — sign in to Sysdig Secure in your browser, copy the hostname, and append `/mcp/secure`. The full per-region list is in [references/mcp-setup.md](mcp-setup.md). Restart Claude Code, then run `/mcp` → `secure-mcp-server` → **Authenticate**, and re-invoke this skill.
+> Use your tenant's regional URL — sign in to Sysdig Secure in your browser, copy the hostname, and append `/mcp/secure`. The full per-region list is in [references/mcp-setup.md](mcp-setup.md). Restart Claude Code, then run `/mcp` → select the Sysdig server → **Authenticate**, and re-invoke this skill.
 
 ## Why the check looks for `get_customer_settings` specifically
 
